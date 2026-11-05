@@ -1,0 +1,274 @@
+import time
+from urllib.parse import quote, urlencode
+
+from google.auth.transport.requests import AuthorizedSession
+from google.oauth2.service_account import Credentials
+
+from .model import HEADERS, sheet_row
+
+
+class SheetsError(RuntimeError):
+    pass
+
+
+class GoogleSheets:
+    def __init__(self, settings, session=None):
+        self.settings = settings
+        if not settings.spreadsheet_id:
+            raise SheetsError("GOOGLE_SPREADSHEET_ID is missing")
+        if session is None:
+            credentials = Credentials.from_service_account_file(
+                str(settings.google_credentials_file), scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            session = AuthorizedSession(credentials)
+        self.session = session
+        self.base = "https://sheets.googleapis.com/v4/spreadsheets/" + settings.spreadsheet_id
+
+    def request(self, path="", method="GET", data=None, retry=True):
+        for attempt in range(5 if retry else 1):
+            try:
+                response = self.session.request(method, self.base + path, json=data, timeout=45)
+            except Exception as error:
+                if not retry or attempt == 4:
+                    raise SheetsError("Google Sheets network/auth error") from error
+                time.sleep(2**attempt)
+                continue
+            if response.status_code < 400:
+                return response.json()
+            if response.status_code == 429 or response.status_code >= 500:
+                if retry and attempt < 4:
+                    time.sleep(2**attempt)
+                    continue
+            raise SheetsError(f"Google Sheets HTTP {response.status_code}; verify API and spreadsheet access")
+        raise SheetsError("Google Sheets retry limit exceeded")
+
+    def metadata(self):
+        return self.request("?fields=spreadsheetId,sheets.properties")
+
+    def values(self, a1):
+        return self.request("/values/" + quote(a1, safe="")).get("values", [])
+
+    def target_sheet(self, create=False):
+        sheets = [x["properties"] for x in self.metadata().get("sheets", [])]
+        existing = next((x for x in sheets if x["title"] == self.settings.sheet_title), None)
+        if existing or not create:
+            return existing
+        if len(sheets) == 1 and sheets[0]["title"] in {"Лист1", "Sheet1"}:
+            initial = sheets[0]
+            prefix = "'" + initial["title"].replace("'", "''") + "'"
+            if not self.values(prefix + "!A1:AA2"):
+                self.request(
+                    ":batchUpdate",
+                    "POST",
+                    {
+                        "requests": [
+                            {
+                                "updateSheetProperties": {
+                                    "properties": {
+                                        "sheetId": initial["sheetId"],
+                                        "title": self.settings.sheet_title,
+                                    },
+                                    "fields": "title",
+                                }
+                            }
+                        ]
+                    },
+                )
+                return self.target_sheet()
+        # addSheet is not idempotent. On ambiguous failure inspect the resulting state.
+        try:
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": self.settings.sheet_title,
+                                    "gridProperties": {"rowCount": 1000, "columnCount": len(HEADERS)},
+                                }
+                            }
+                        }
+                    ]
+                },
+                retry=False,
+            )
+        except SheetsError:
+            existing = self.target_sheet()
+            if not existing:
+                raise
+            return existing
+        return self.target_sheet()
+
+    def sync(self, records):
+        sheet = self.target_sheet(create=True)
+        prefix = "'" + self.settings.sheet_title.replace("'", "''") + "'"
+        columns = len(HEADERS)
+        max_rows = sheet["gridProperties"]["rowCount"]
+        if max_rows > 100000:
+            raise SheetsError("Target tab exceeds 100000 rows; review retention before syncing")
+        if sheet["gridProperties"]["columnCount"] < columns:
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": sheet["sheetId"],
+                                    "gridProperties": {"columnCount": columns},
+                                },
+                                "fields": "gridProperties.columnCount",
+                            }
+                        }
+                    ]
+                },
+            )
+        rows = self.values(f"{prefix}!A1:AA{max_rows}")
+        if rows and any(rows[0]) and rows[0] != HEADERS:
+            raise SheetsError("Target headers differ; refusing to overwrite another table")
+        index = {}
+        for number, row in enumerate(rows[1:], 2):
+            if not row or not row[0]:
+                if any(row):
+                    raise SheetsError(f"Row {number} has data but no TenderLand ID")
+                continue
+            tender_id = str(row[0])
+            if tender_id in index:
+                raise SheetsError(f"Duplicate tender ID in spreadsheet: {tender_id}")
+            index[tender_id] = number
+        writes = []
+        if not rows or not any(rows[0]):
+            writes.append({"range": f"{prefix}!A1:AA1", "values": [HEADERS]})
+        next_row = max(2, len(rows) + 1)
+        new_count, updated_count = 0, 0
+        for record in records:
+            number = index.get(record["id"])
+            if number is None:
+                number, next_row = next_row, next_row + 1
+                new_count += 1
+            values = sheet_row(record)
+            old = rows[number - 1] if number <= len(rows) else []
+            old = [str(x) for x in old] + [""] * (columns - len(old))
+            if old != values:
+                writes.append({"range": f"{prefix}!A{number}:AA{number}", "values": [values]})
+                updated_count += int(record["id"] in index)
+        if next_row - 1 > max_rows:
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": sheet["sheetId"],
+                                    "gridProperties": {"rowCount": next_row + 100},
+                                },
+                                "fields": "gridProperties.rowCount",
+                            }
+                        }
+                    ]
+                },
+            )
+        if not rows or not any(rows[0]):
+            self.format_sheet(sheet["sheetId"])
+        for offset in range(0, len(writes), 100):
+            batch = writes[offset : offset + 100]
+            self.request("/values:batchUpdate", "POST", {"valueInputOption": "RAW", "data": batch})
+            # Read back exact cells: a successful HTTP response alone is not delivery proof.
+            ranges = urlencode([("ranges", item["range"]) for item in batch])
+            readback = self.request("/values:batchGet?" + ranges).get("valueRanges", [])
+            if len(readback) != len(batch):
+                raise SheetsError("Google Sheets readback omitted requested ranges")
+            for item, result in zip(batch, readback, strict=True):
+                observed = result.get("values", [])
+                actual = observed[0] if observed else []
+                actual += [""] * (columns - len(actual))
+                if actual != item["values"][0]:
+                    raise SheetsError("Google Sheets readback mismatch")
+            if offset + 100 < len(writes):
+                time.sleep(2)
+        return {"new": new_count, "updated": updated_count, "written_rows": len(writes)}
+
+    def format_sheet(self, sheet_id):
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {
+                "requests": [
+                    {
+                        "updateSpreadsheetProperties": {
+                            "properties": {"timeZone": "Europe/Moscow"},
+                            "fields": "timeZone",
+                        }
+                    },
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 2},
+                            },
+                            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                        }
+                    },
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 0,
+                                "endRowIndex": 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": len(HEADERS),
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "backgroundColor": {"red": 0.93, "green": 0.93, "blue": 0.93},
+                                    "textFormat": {"bold": True},
+                                    "wrapStrategy": "WRAP",
+                                }
+                            },
+                            "fields": "userEnteredFormat",
+                        }
+                    },
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": 0,
+                                "endIndex": 1,
+                            },
+                            "properties": {"pixelSize": 60},
+                            "fields": "pixelSize",
+                        }
+                    },
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": 1,
+                                "endIndex": 2,
+                            },
+                            "properties": {"pixelSize": 420},
+                            "fields": "pixelSize",
+                        }
+                    },
+                    {
+                        "setBasicFilter": {
+                            "filter": {
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 0,
+                                    "startColumnIndex": 0,
+                                    "endColumnIndex": len(HEADERS),
+                                }
+                            }
+                        }
+                    },
+                ]
+            },
+        )

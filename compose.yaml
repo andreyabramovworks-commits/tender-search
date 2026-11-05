@@ -1,0 +1,59 @@
+name: tender-search
+services:
+  db:
+    image: postgres:17.10-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tender_search}
+      POSTGRES_USER: ${POSTGRES_USER:-tender_search}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    image: tender-search:${RELEASE_SHA:-local}
+    build: .
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender_search}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-tender_search}
+      TENDERLAND_CREDENTIALS_FILE: /run/secrets/tenderland.json
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-service-account.json
+      GOOGLE_SPREADSHEET_ID: ${GOOGLE_SPREADSHEET_ID:-}
+      GOOGLE_SHEET_TITLE: ${GOOGLE_SHEET_TITLE:-Тендеры}
+      DATA_DIR: /app/data
+      SEARCH_MODES: ${SEARCH_MODES:-Pro,Standard}
+      SEARCH_SCOPES: ${SEARCH_SCOPES:-title,documents}
+      REQUEST_DELAY_SECONDS: ${REQUEST_DELAY_SECONDS:-1.5}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-60}
+      PAGE_SIZE: ${PAGE_SIZE:-100}
+      MAX_PAGES: ${MAX_PAGES:-100}
+      TZ: Europe/Moscow
+    volumes:
+      - ${TENDER_ROOT:-.}/secrets:/run/secrets:ro
+      - ${TENDER_ROOT:-.}/shared/data:/app/data
+    shm_size: 512mb
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["tender-search", "run"]
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:

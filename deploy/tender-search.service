@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily TenderLand collection and Google Sheets synchronization
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tender-search/bin/run.sh run
+TimeoutStartSec=6h
+UMask=0077
+

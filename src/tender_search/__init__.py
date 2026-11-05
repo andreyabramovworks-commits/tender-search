@@ -1,0 +1,1 @@
+"""TenderLand monitoring without AI."""

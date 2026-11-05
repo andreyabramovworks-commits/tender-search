@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy latest CI-approved tender-search revision
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tender-search/bin/deploy.sh
+TimeoutStartSec=30min
+UMask=0077
+
