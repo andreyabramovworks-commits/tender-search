@@ -25,7 +25,7 @@ class Settings:
         default_factory=lambda: tuple(os.getenv("SEARCH_MODES", "Pro,Standard").split(","))
     )
     scopes: tuple = field(
-        default_factory=lambda: tuple(os.getenv("SEARCH_SCOPES", "title,documents").split(","))
+        default_factory=lambda: tuple(os.getenv("SEARCH_SCOPES", "title").split(","))
     )
     page_size: int = field(default_factory=lambda: int(os.getenv("PAGE_SIZE", "100")))
     max_pages: int = field(default_factory=lambda: int(os.getenv("MAX_PAGES", "100")))
