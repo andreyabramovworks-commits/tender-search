@@ -64,6 +64,8 @@ class FakeSheet:
                 self.lose_next_response = False
                 raise TimeoutError("Server wrote the cells, response was lost")
             return Response({})
+        if method == "POST" and parsed.path.endswith(":batchUpdate"):
+            return Response({})
         raise AssertionError((method, url, json))
 
 

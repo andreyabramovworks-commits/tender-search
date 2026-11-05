@@ -191,7 +191,65 @@ class GoogleSheets:
                     raise SheetsError("Google Sheets readback mismatch")
             if offset + 100 < len(writes):
                 time.sleep(2)
+        if new_count:
+            self.format_data(sheet["sheetId"], next_row - 1)
         return {"new": new_count, "updated": updated_count, "written_rows": len(writes)}
+
+    def format_data(self, sheet_id, last_row):
+        requests = []
+        # Explicit widths avoid broken header words and keep IDs/numbers readable.
+        widths = [
+            (0, 1, 140),
+            (1, 2, 520),
+            (2, 4, 165),
+            (4, 6, 240),
+            (6, 7, 170),
+            (7, 8, 300),
+            (8, 9, 160),
+            (9, 10, 440),
+            (10, 11, 300),
+            (11, 12, 165),
+            (12, 13, 280),
+            (13, 14, 150),
+            (14, 15, 100),
+            (15, 16, 350),
+            (16, 19, 190),
+            (19, 20, 300),
+            (20, 21, 190),
+            (21, 27, 200),
+        ]
+        for first, end, pixels in widths:
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "COLUMNS",
+                            "startIndex": first,
+                            "endIndex": end,
+                        },
+                        "properties": {"pixelSize": pixels},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+        if last_row > 1:
+            requests.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 1,
+                            "endRowIndex": last_row,
+                            "startColumnIndex": 1,
+                            "endColumnIndex": 2,
+                        },
+                        "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                        "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment",
+                    }
+                }
+            )
+        self.request(":batchUpdate", "POST", {"requests": requests})
 
     def format_sheet(self, sheet_id):
         self.request(
