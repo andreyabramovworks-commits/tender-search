@@ -89,10 +89,18 @@ def run(settings, args):
         # A tender no longer returned by the active filter may have closed/been cancelled.
         missing = [x for x in store.records() if x["id"] not in seen]
         refreshed = set()
-        for incoming, raw in client.refresh(missing, settings.search_modes[0]):
-            enriched, detail = client.enrich(incoming)
-            store.upsert(enriched, {"search": raw, "detail": detail}, None, now())
-            refreshed.add(incoming["id"])
+        try:
+            for incoming, raw in client.refresh(missing, settings.search_modes[0]):
+                try:
+                    enriched, detail = client.enrich(incoming)
+                except SourceError:
+                    LOG.warning("Previously found tender %s could not be refreshed", incoming["id"])
+                    continue
+                store.upsert(enriched, {"search": raw, "detail": detail}, None, now())
+                refreshed.add(incoming["id"])
+        except SourceError:
+            # An unavailable archived card must not prevent delivery of new tenders.
+            LOG.warning("Refresh incomplete; delivering new records with partial run status")
         summary["not_refreshed"] = len(missing) - len(refreshed)
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
