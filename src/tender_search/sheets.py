@@ -264,6 +264,37 @@ class GoogleSheets:
             self.format_sheet(sheet["sheetId"])
         return {"rows": len(documents)}
 
+    def ensure_ai_analysis(self):
+        title = "AI-анализ"
+        headers = [
+            "ID TenderLand",
+            "Статус",
+            "Приоритет",
+            "Объект закупки",
+            "Наши работы",
+            "Цена и сроки",
+            "Риски",
+            "Недостающие документы",
+            "Вопросы заказчику",
+            "Доказательства и ссылки",
+            "Нужен ручной доступ",
+            "Актуально на МСК",
+            "Решение менеджера",
+        ]
+        sheet = self.target_sheet(title, create=True)
+        prefix = "'AI-анализ'"
+        existing = self.values(prefix + "!A1:M2")
+        if existing and any(existing[0]) and existing[0] != headers:
+            raise SheetsError("AI analysis headers differ; refusing to overwrite")
+        if not existing or not any(existing[0]):
+            self.request(
+                "/values:batchUpdate",
+                "POST",
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:M1", "values": [headers]}]},
+            )
+            self.format_sheet(sheet["sheetId"])
+        return {"headers": len(headers)}
+
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
         prefix = "'" + title.replace("'", "''") + "'"

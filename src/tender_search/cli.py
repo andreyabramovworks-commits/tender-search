@@ -133,6 +133,7 @@ def run(settings, args):
             if hasattr(store, "seed_document_links"):
                 store.seed_document_links(store.records())
                 summary["documents"] = sheets.sync_documents(store.documents())
+                summary["ai_analysis"] = sheets.ensure_ai_analysis()
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -244,6 +245,7 @@ def main():
             )
             store.seed_document_links(store.records())
             print(json.dumps(sheets.sync_documents(store.documents()), ensure_ascii=False))
+            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
     finally:
         store.close()
     return 0
