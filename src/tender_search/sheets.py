@@ -228,6 +228,42 @@ class GoogleSheets:
         self.format_sheet(sheet["sheetId"])
         self.format_data(sheet["sheetId"], len(rows))
 
+    def sync_documents(self, documents):
+        title, headers = (
+            "Документы",
+            ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"],
+        )
+        sheet = self.target_sheet(title, create=True)
+        prefix = "'Документы'"
+        existing = self.values(prefix + "!A1:G10000")
+        if existing and any(existing[0]) and existing[0] != headers:
+            raise SheetsError("Document registry headers differ; refusing to overwrite")
+        rows = [headers] + [
+            [
+                x["tender_id"],
+                x["kind"],
+                x["title"],
+                x["url"],
+                x["access_status"],
+                x["sha256"] or "",
+                x["discovered_at"],
+            ]
+            for x in documents
+        ]
+        writes = [{"range": prefix + f"!A{i}:G{i}", "values": [row]} for i, row in enumerate(rows, 1)]
+        old_end = len(existing)
+        for i in range(len(rows) + 1, old_end + 1):
+            writes.append({"range": prefix + f"!A{i}:G{i}", "values": [[""] * len(headers)]})
+        for offset in range(0, len(writes), 100):
+            self.request(
+                "/values:batchUpdate",
+                "POST",
+                {"valueInputOption": "RAW", "data": writes[offset : offset + 100]},
+            )
+        if not existing or not any(existing[0]):
+            self.format_sheet(sheet["sheetId"])
+        return {"rows": len(documents)}
+
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
         prefix = "'" + title.replace("'", "''") + "'"

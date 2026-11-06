@@ -61,6 +61,29 @@ class QueryRun(Base):
     error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
+class TenderDocument(Base):
+    __tablename__ = "tender_documents"
+    __table_args__ = (UniqueConstraint("tender_id", "url"),)
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tender_id: Mapped[int] = mapped_column(ForeignKey("tenders.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(1000))
+    url: Mapped[str] = mapped_column(String(4000))
+    access_status: Mapped[str] = mapped_column(String(80), default="unknown")
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_metadata: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class TenderAnalysis(Base):
+    __tablename__ = "tender_analyses"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tender_id: Mapped[int] = mapped_column(ForeignKey("tenders.id"), index=True)
+    status: Mapped[str] = mapped_column(String(80))
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Store:
     def __init__(self, database_url):
         if not database_url.startswith("postgresql+psycopg://"):
@@ -119,6 +142,50 @@ class Store:
     def records(self):
         with Session(self.engine) as session:
             return list(session.scalars(select(Tender.payload).order_by(Tender.id)))
+
+    def seed_document_links(self, records):
+        with Session(self.engine) as session, session.begin():
+            for record in records:
+                for kind, title, url in (
+                    ("tenderland_card", "Карточка TenderLand", record.get("url", "")),
+                    ("source_entry", "Первоисточник закупки", record.get("source_url", "")),
+                ):
+                    if not url:
+                        continue
+                    exists = session.scalar(
+                        select(TenderDocument.id).where(
+                            TenderDocument.tender_id == int(record["id"]), TenderDocument.url == url
+                        )
+                    )
+                    if not exists:
+                        session.add(
+                            TenderDocument(
+                                tender_id=int(record["id"]),
+                                kind=kind,
+                                title=title,
+                                url=url,
+                                access_status="requires_manual_access",
+                                document_metadata={},
+                                discovered_at=datetime.now(UTC),
+                            )
+                        )
+
+    def documents(self):
+        with Session(self.engine) as session:
+            return [
+                {
+                    "tender_id": str(x.tender_id),
+                    "kind": x.kind,
+                    "title": x.title,
+                    "url": x.url,
+                    "access_status": x.access_status,
+                    "sha256": x.content_sha256,
+                    "discovered_at": x.discovered_at.isoformat(),
+                }
+                for x in session.scalars(
+                    select(TenderDocument).order_by(TenderDocument.tender_id, TenderDocument.id)
+                )
+            ]
 
     def status(self):
         with Session(self.engine) as session:

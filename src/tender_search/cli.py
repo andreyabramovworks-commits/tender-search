@@ -130,6 +130,9 @@ def run(settings, args):
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
             summary["sheets"] = sync_review_queues(sheets, store.records(), reference["rules"])
+            if hasattr(store, "seed_document_links"):
+                store.seed_document_links(store.records())
+                summary["documents"] = sheets.sync_documents(store.documents())
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -239,6 +242,8 @@ def main():
                     sync_review_queues(sheets, store.records(), reference["rules"]), ensure_ascii=False
                 )
             )
+            store.seed_document_links(store.records())
+            print(json.dumps(sheets.sync_documents(store.documents()), ensure_ascii=False))
     finally:
         store.close()
     return 0
