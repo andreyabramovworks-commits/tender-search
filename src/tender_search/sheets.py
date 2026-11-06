@@ -48,9 +48,10 @@ class GoogleSheets:
     def values(self, a1):
         return self.request("/values/" + quote(a1, safe="")).get("values", [])
 
-    def target_sheet(self, create=False):
+    def target_sheet(self, title=None, create=False):
+        title = title or self.settings.sheet_title
         sheets = [x["properties"] for x in self.metadata().get("sheets", [])]
-        existing = next((x for x in sheets if x["title"] == self.settings.sheet_title), None)
+        existing = next((x for x in sheets if x["title"] == title), None)
         if existing or not create:
             return existing
         if len(sheets) == 1 and sheets[0]["title"] in {"Лист1", "Sheet1"}:
@@ -66,7 +67,7 @@ class GoogleSheets:
                                 "updateSheetProperties": {
                                     "properties": {
                                         "sheetId": initial["sheetId"],
-                                        "title": self.settings.sheet_title,
+                                        "title": title,
                                     },
                                     "fields": "title",
                                 }
@@ -74,7 +75,7 @@ class GoogleSheets:
                         ]
                     },
                 )
-                return self.target_sheet()
+                return self.target_sheet(title)
         # addSheet is not idempotent. On ambiguous failure inspect the resulting state.
         try:
             self.request(
@@ -85,7 +86,7 @@ class GoogleSheets:
                         {
                             "addSheet": {
                                 "properties": {
-                                    "title": self.settings.sheet_title,
+                                    "title": title,
                                     "gridProperties": {"rowCount": 1000, "columnCount": len(HEADERS)},
                                 }
                             }
@@ -95,15 +96,42 @@ class GoogleSheets:
                 retry=False,
             )
         except SheetsError:
-            existing = self.target_sheet()
+            existing = self.target_sheet(title)
             if not existing:
                 raise
             return existing
-        return self.target_sheet()
+        return self.target_sheet(title)
 
     def sync(self, records):
-        sheet = self.target_sheet(create=True)
-        prefix = "'" + self.settings.sheet_title.replace("'", "''") + "'"
+        """Backward-compatible one-tab sync used by diagnostics and existing tests."""
+        return self._sync_tab(self.settings.sheet_title, records, set())
+
+    def sync_partitioned(self, buckets):
+        """Synchronise mutually-exclusive review queues without losing candidates.
+
+        A record is written and read back in its destination first.  Only after that
+        proof is received are stale copies cleared from the other managed tabs.
+        Re-running after an interrupted move therefore reconciles safely.
+        """
+        titles = (self.settings.sheet_title, "Партнёрам", "Нецелевые")
+        if set(buckets) != set(titles):
+            raise SheetsError("Unexpected review queue names")
+        ids = [str(record["id"]) for records in buckets.values() for record in records]
+        if len(ids) != len(set(ids)):
+            raise SheetsError("A tender cannot belong to more than one review queue")
+        managed_ids = set(ids)
+        # Phase 1 delivers every destination. Phase 2 removes stale copies only
+        # after all destinations are known to be present.
+        result = {title: self._sync_tab(title, buckets[title], set()) for title in titles}
+        for title in titles:
+            cleanup = self._sync_tab(title, buckets[title], managed_ids)
+            result[title]["cleared"] = cleanup["cleared"]
+            result[title]["written_rows"] += cleanup["written_rows"]
+        return result
+
+    def _sync_tab(self, title, records, managed_ids):
+        sheet = self.target_sheet(title, create=True)
+        prefix = "'" + title.replace("'", "''") + "'"
         columns = len(HEADERS)
         max_rows = sheet["gridProperties"]["rowCount"]
         if max_rows > 100000:
@@ -142,14 +170,18 @@ class GoogleSheets:
         writes = []
         if not rows or not any(rows[0]):
             writes.append({"range": f"{prefix}!A1:AA1", "values": [HEADERS]})
+        free_rows = [number for number, row in enumerate(rows[1:], 2) if not any(row)]
         next_row = max(2, len(rows) + 1)
         new_count, updated_count = 0, 0
         for record in records:
             number = index.get(record["id"])
             if number is None:
-                number, next_row = next_row, next_row + 1
+                if free_rows:
+                    number = free_rows.pop(0)
+                else:
+                    number, next_row = next_row, next_row + 1
                 new_count += 1
-            values = sheet_row(record)
+            values = sheet_row(record, record.get("_decision"))
             old = rows[number - 1] if number <= len(rows) else []
             old = [str(x) for x in old] + [""] * (columns - len(old))
             if old != values:
@@ -173,6 +205,17 @@ class GoogleSheets:
                     ]
                 },
             )
+        # Destination rows have been verified above. Now clear stale copies of
+        # managed TenderLand IDs, preserving other rows and any manual notes.
+        expected_ids = {str(record["id"]) for record in records}
+        stale = [number for tender_id, number in index.items() if tender_id in managed_ids - expected_ids]
+        for offset in range(0, len(stale), 100):
+            clear_batch = [
+                {"range": f"{prefix}!A{number}:AA{number}", "values": [[""] * columns]}
+                for number in stale[offset : offset + 100]
+            ]
+            self.request("/values:batchUpdate", "POST", {"valueInputOption": "RAW", "data": clear_batch})
+            writes.extend(clear_batch)
         if not rows or not any(rows[0]):
             self.format_sheet(sheet["sheetId"])
         for offset in range(0, len(writes), 100):
@@ -193,7 +236,12 @@ class GoogleSheets:
                 time.sleep(2)
         if new_count:
             self.format_data(sheet["sheetId"], next_row - 1)
-        return {"new": new_count, "updated": updated_count, "written_rows": len(writes)}
+        return {
+            "new": new_count,
+            "updated": updated_count,
+            "cleared": len(stale),
+            "written_rows": len(writes),
+        }
 
     def format_data(self, sheet_id, last_row):
         requests = []

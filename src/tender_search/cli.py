@@ -7,12 +7,24 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from .classification import DIRECT, NON_TARGET, PARTNER, classify
 from .config import Settings
 from .db import Store
 from .sheets import GoogleSheets
 from .source import SourceError, TenderLand
 
 LOG = logging.getLogger("tender-search")
+
+
+def sync_review_queues(sheets, records):
+    buckets = {"Тендеры": [], "Партнёрам": [], "Нецелевые": []}
+    routes = {DIRECT: "Тендеры", PARTNER: "Партнёрам", NON_TARGET: "Нецелевые"}
+    for record in records:
+        decision = classify(record)
+        buckets[routes[decision.bucket]].append({**record, "_decision": decision})
+    outcome = sheets.sync_partitioned(buckets)
+    outcome["counts"] = {title: len(items) for title, items in buckets.items()}
+    return outcome
 
 
 def now():
@@ -104,7 +116,7 @@ def run(settings, args):
         summary["not_refreshed"] = len(missing) - len(refreshed)
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
-            summary["sheets"] = sheets.sync(store.records())
+            summary["sheets"] = sync_review_queues(sheets, store.records())
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -199,7 +211,7 @@ def main():
         if args.command == "status":
             print(json.dumps(store.status(), ensure_ascii=False, indent=2))
         elif args.command == "sync":
-            print(json.dumps(GoogleSheets(settings).sync(store.records()), ensure_ascii=False))
+            print(json.dumps(sync_review_queues(GoogleSheets(settings), store.records()), ensure_ascii=False))
     finally:
         store.close()
     return 0

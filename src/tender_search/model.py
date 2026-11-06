@@ -134,14 +134,17 @@ def moscow(value):
     )
 
 
-def sheet_row(record):
+def sheet_row(record, decision=None):
     def unique(key):
         return "; ".join(dict.fromkeys(x[key] for x in record["matches"]))
 
-    reasons = "\n".join(
+    source_reasons = "\n".join(
         f"TenderLand вернул по «{x['query']}»; {x['mode']}; {'название' if x['scope'] == 'title' else 'документация'}"
         for x in record["matches"]
     )
+    reasons = (
+        (decision.reason + ("; нужна проверка\n" if decision.needs_review else "\n")) if decision else ""
+    ) + source_reasons
     return [
         str(x or "")[:45000]
         for x in [

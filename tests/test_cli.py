@@ -61,9 +61,9 @@ def test_unavailable_old_tender_does_not_block_new_google_rows(monkeypatch, tmp_
         def metadata(self):
             return {}
 
-        def sync(self, records):
-            delivered.extend(records)
-            return {"new": 1}
+        def sync_partitioned(self, buckets):
+            delivered.extend(record for records in buckets.values() for record in records)
+            return {"Тендеры": {"new": 1}}
 
     monkeypatch.setattr("tender_search.cli.Store", FakeStore)
     monkeypatch.setattr("tender_search.cli.TenderLand", FakeSource)
