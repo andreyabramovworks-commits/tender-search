@@ -9,8 +9,10 @@ import random
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
+from urllib.parse import urljoin, urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 from .model import normalize
 
@@ -318,6 +320,44 @@ class TenderLand:
             "EntityLots": lots,
         }
         return record, detail
+
+    def discover_documents(self, record):
+        """Find direct attachment links on a public procurement source page.
+
+        This deliberately records URLs only: it never downloads tender files.
+        Pages behind a login or dynamically unavailable pages return no attachments
+        and are left for the manual-access queue.
+        """
+        source_url = record.get("source_url", "")
+        if not source_url.startswith(("https://", "http://")):
+            return []
+        try:
+            self.request_count += 1
+            response = self.session.get(source_url, timeout=self.settings.timeout_seconds)
+            if response.status_code >= 400 or "html" not in response.headers.get("Content-Type", "text/html"):
+                return []
+        except requests.RequestException:
+            return []
+        soup = BeautifulSoup(response.text, "html.parser")
+        found, seen = [], set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z")
+        for anchor in soup.find_all("a", href=True):
+            href = urljoin(response.url, anchor["href"].strip())
+            if urlparse(href).scheme not in {"http", "https"}:
+                continue
+            title = anchor.get_text(" ", strip=True) or anchor.get("title", "") or "Документ закупки"
+            signal = (href + " " + title).lower()
+            if not any(extension in signal for extension in extensions) and not re.search(
+                r"\b(документ|документац|извещен|тз|технич|договор|смет|чертеж|проект)\b", signal
+            ):
+                continue
+            if href in seen:
+                continue
+            seen.add(href)
+            path = urlparse(href).path.lower()
+            kind = next((extension[1:] for extension in extensions if path.endswith(extension)), "other")
+            found.append({"title": title[:1000], "url": href, "kind": kind, "access_status": "public_link"})
+        return found
 
     def close(self):
         self.session.close()

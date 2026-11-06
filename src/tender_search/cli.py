@@ -31,6 +31,29 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+def discover_and_sync_documents(store, sheets, client, records, rules):
+    """Collect attachment URLs for direct tenders, then publish only attachments.
+
+    The collector fetches HTML pages only. It stores URLs and metadata; tender
+    files themselves are intentionally not downloaded at this stage.
+    """
+    direct_records = [x for x in records if classify(x, rules).bucket == DIRECT]
+    direct_ids = [x["id"] for x in direct_records]
+    store.seed_document_links(direct_records)
+    discovered = 0
+    for record in direct_records:
+        try:
+            links = client.discover_documents(record)
+            store.add_document_links(record["id"], links)
+            discovered += len(links)
+        except Exception as error:  # One unavailable procurement site must not stop the daily run.
+            LOG.warning("Document links unavailable for tender %s: %s", record["id"], type(error).__name__)
+    result = sheets.sync_documents(store.documents(direct_ids))
+    result["scanned_tenders"] = len(direct_records)
+    result["new_links_seen"] = discovered
+    return result
+
+
 def export_snapshot(settings, run_id, summary, records):
     folder = settings.data_dir / "reports"
     folder.mkdir(parents=True, exist_ok=True)
@@ -132,11 +155,9 @@ def run(settings, args):
             current_records = store.records()
             summary["sheets"] = sync_review_queues(sheets, current_records, reference["rules"])
             if hasattr(store, "seed_document_links"):
-                direct_ids = [
-                    x["id"] for x in current_records if classify(x, reference["rules"]).bucket == DIRECT
-                ]
-                store.seed_document_links([x for x in current_records if x["id"] in direct_ids])
-                summary["documents"] = sheets.sync_documents(store.documents(direct_ids))
+                summary["documents"] = discover_and_sync_documents(
+                    store, sheets, client, current_records, reference["rules"]
+                )
                 summary["ai_analysis"] = sheets.ensure_ai_analysis()
             summary["synced"] = True
     except Exception as error:
@@ -248,11 +269,18 @@ def main():
                     sync_review_queues(sheets, current_records, reference["rules"]), ensure_ascii=False
                 )
             )
-            direct_ids = [
-                x["id"] for x in current_records if classify(x, reference["rules"]).bucket == DIRECT
-            ]
-            store.seed_document_links([x for x in current_records if x["id"] in direct_ids])
-            print(json.dumps(sheets.sync_documents(store.documents(direct_ids)), ensure_ascii=False))
+            client = TenderLand(settings)
+            try:
+                print(
+                    json.dumps(
+                        discover_and_sync_documents(
+                            store, sheets, client, current_records, reference["rules"]
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+            finally:
+                client.close()
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
     finally:
         store.close()

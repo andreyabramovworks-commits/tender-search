@@ -147,8 +147,12 @@ class Store:
         with Session(self.engine) as session, session.begin():
             for record in records:
                 for kind, title, url in (
-                    ("tenderland_card", "Карточка TenderLand", record.get("url", "")),
-                    ("source_entry", "Первоисточник закупки", record.get("source_url", "")),
+                    ("tenderland_card", "Карточка TenderLand (служебная ссылка)", record.get("url", "")),
+                    (
+                        "source_entry",
+                        "Страница первоисточника (поиск вложений)",
+                        record.get("source_url", ""),
+                    ),
                 ):
                     if not url:
                         continue
@@ -169,6 +173,27 @@ class Store:
                                 discovered_at=datetime.now(UTC),
                             )
                         )
+
+    def add_document_links(self, tender_id, documents):
+        with Session(self.engine) as session, session.begin():
+            for document in documents:
+                exists = session.scalar(
+                    select(TenderDocument.id).where(
+                        TenderDocument.tender_id == int(tender_id), TenderDocument.url == document["url"]
+                    )
+                )
+                if not exists:
+                    session.add(
+                        TenderDocument(
+                            tender_id=int(tender_id),
+                            kind=document["kind"],
+                            title=document["title"],
+                            url=document["url"],
+                            access_status=document["access_status"],
+                            document_metadata={},
+                            discovered_at=datetime.now(UTC),
+                        )
+                    )
 
     def documents(self, tender_ids=None):
         with Session(self.engine) as session:

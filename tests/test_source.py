@@ -57,3 +57,24 @@ def test_query_syntax_is_preserved_for_native_search():
     value = TenderLand.text_filter("БПЛА++строител++лес", "documents")
     assert value["name"] == "tender_files"
     assert value["include"] == "БПЛА++строител++лес"
+
+
+def test_document_collector_keeps_direct_attachments_only(monkeypatch):
+    client = TenderLand(Settings())
+
+    class Response:
+        status_code = 200
+        url = "https://example.org/procedure/123"
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        text = """
+        <a href='/docs/tz.pdf'>Техническое задание</a>
+        <a href='files/contract.docx' title='Проект договора'></a>
+        <a href='/procedure/123'>Карточка закупки</a>
+        """
+
+    monkeypatch.setattr(client.session, "get", lambda *args, **kwargs: Response())
+    result = client.discover_documents({"source_url": "https://example.org/procedure/123"})
+    assert [(x["kind"], x["url"]) for x in result] == [
+        ("pdf", "https://example.org/docs/tz.pdf"),
+        ("docx", "https://example.org/procedure/files/contract.docx"),
+    ]

@@ -238,6 +238,9 @@ class GoogleSheets:
         existing = self.values(prefix + "!A1:G10000")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("Document registry headers differ; refusing to overwrite")
+        # Entry pages are retained in PostgreSQL for audit, but this tab is for
+        # actual tender attachments. Showing landing pages here misled reviewers.
+        attachments = [x for x in documents if x["kind"] not in {"tenderland_card", "source_entry"}]
         rows = [headers] + [
             [
                 x["tender_id"],
@@ -248,7 +251,7 @@ class GoogleSheets:
                 x["sha256"] or "",
                 x["discovered_at"],
             ]
-            for x in documents
+            for x in attachments
         ]
         if len(rows) > sheet["gridProperties"]["rowCount"]:
             self.request(
@@ -280,7 +283,7 @@ class GoogleSheets:
             )
         if not existing or not any(existing[0]):
             self.format_sheet(sheet["sheetId"])
-        return {"rows": len(documents)}
+        return {"rows": len(attachments)}
 
     def ensure_ai_analysis(self):
         title = "AI-анализ"
