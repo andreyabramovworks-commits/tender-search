@@ -129,10 +129,14 @@ def run(settings, args):
         summary["not_refreshed"] = len(missing) - len(refreshed)
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
-            summary["sheets"] = sync_review_queues(sheets, store.records(), reference["rules"])
+            current_records = store.records()
+            summary["sheets"] = sync_review_queues(sheets, current_records, reference["rules"])
             if hasattr(store, "seed_document_links"):
-                store.seed_document_links(store.records())
-                summary["documents"] = sheets.sync_documents(store.documents())
+                direct_ids = [
+                    x["id"] for x in current_records if classify(x, reference["rules"]).bucket == DIRECT
+                ]
+                store.seed_document_links([x for x in current_records if x["id"] in direct_ids])
+                summary["documents"] = sheets.sync_documents(store.documents(direct_ids))
                 summary["ai_analysis"] = sheets.ensure_ai_analysis()
             summary["synced"] = True
     except Exception as error:
@@ -238,13 +242,17 @@ def main():
                     ],
                 }
             )
+            current_records = store.records()
             print(
                 json.dumps(
-                    sync_review_queues(sheets, store.records(), reference["rules"]), ensure_ascii=False
+                    sync_review_queues(sheets, current_records, reference["rules"]), ensure_ascii=False
                 )
             )
-            store.seed_document_links(store.records())
-            print(json.dumps(sheets.sync_documents(store.documents()), ensure_ascii=False))
+            direct_ids = [
+                x["id"] for x in current_records if classify(x, reference["rules"]).bucket == DIRECT
+            ]
+            store.seed_document_links([x for x in current_records if x["id"] in direct_ids])
+            print(json.dumps(sheets.sync_documents(store.documents(direct_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
     finally:
         store.close()

@@ -250,6 +250,24 @@ class GoogleSheets:
             ]
             for x in documents
         ]
+        if len(rows) > sheet["gridProperties"]["rowCount"]:
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": sheet["sheetId"],
+                                    "gridProperties": {"rowCount": len(rows) + 100},
+                                },
+                                "fields": "gridProperties.rowCount",
+                            }
+                        }
+                    ]
+                },
+            )
         writes = [{"range": prefix + f"!A{i}:G{i}", "values": [row]} for i, row in enumerate(rows, 1)]
         old_end = len(existing)
         for i in range(len(rows) + 1, old_end + 1):

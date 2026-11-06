@@ -170,8 +170,11 @@ class Store:
                             )
                         )
 
-    def documents(self):
+    def documents(self, tender_ids=None):
         with Session(self.engine) as session:
+            statement = select(TenderDocument).order_by(TenderDocument.tender_id, TenderDocument.id)
+            if tender_ids is not None:
+                statement = statement.where(TenderDocument.tender_id.in_([int(x) for x in tender_ids]))
             return [
                 {
                     "tender_id": str(x.tender_id),
@@ -182,9 +185,7 @@ class Store:
                     "sha256": x.content_sha256,
                     "discovered_at": x.discovered_at.isoformat(),
                 }
-                for x in session.scalars(
-                    select(TenderDocument).order_by(TenderDocument.tender_id, TenderDocument.id)
-                )
+                for x in session.scalars(statement)
             ]
 
     def status(self):
