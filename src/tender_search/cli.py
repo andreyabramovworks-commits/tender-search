@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from .classification import DIRECT, NON_TARGET, PARTNER, classify
+from .classification import DIRECT, NON_TARGET, PARTNER, classify, default_rules
 from .config import Settings
 from .db import Store
 from .sheets import GoogleSheets
@@ -16,11 +16,11 @@ from .source import SourceError, TenderLand
 LOG = logging.getLogger("tender-search")
 
 
-def sync_review_queues(sheets, records):
+def sync_review_queues(sheets, records, rules=None):
     buckets = {"Тендеры": [], "Партнёрам": [], "Нецелевые": []}
     routes = {DIRECT: "Тендеры", PARTNER: "Партнёрам", NON_TARGET: "Нецелевые"}
     for record in records:
-        decision = classify(record)
+        decision = classify(record, rules)
         buckets[routes[decision.bucket]].append({**record, "_decision": decision})
     outcome = sheets.sync_partitioned(buckets)
     outcome["counts"] = {title: len(items) for title, items in buckets.items()}
@@ -56,11 +56,24 @@ def run(settings, args):
     details_cache = {}
     fatal = None
     try:
+        reference = {
+            "keywords": settings.reference_keywords() if hasattr(settings, "reference_keywords") else None,
+            "rules": [
+                dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                for row in default_rules()
+            ],
+        }
         if not args.collect_only:
             sheets = GoogleSheets(settings)
             sheets.metadata()  # fail before a long collection if access is not configured
+            if hasattr(sheets, "reference"):
+                reference = sheets.reference(reference)
         client.login()
-        jobs = list(settings.jobs())
+        jobs = (
+            list(settings.jobs(reference["keywords"]))
+            if reference["keywords"] is not None
+            else list(settings.jobs())
+        )
         summary["jobs_planned"] = len(jobs)
         if args.limit_jobs:
             jobs = jobs[: args.limit_jobs]
@@ -116,7 +129,7 @@ def run(settings, args):
         summary["not_refreshed"] = len(missing) - len(refreshed)
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
-            summary["sheets"] = sync_review_queues(sheets, store.records())
+            summary["sheets"] = sync_review_queues(sheets, store.records(), reference["rules"])
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -211,7 +224,21 @@ def main():
         if args.command == "status":
             print(json.dumps(store.status(), ensure_ascii=False, indent=2))
         elif args.command == "sync":
-            print(json.dumps(sync_review_queues(GoogleSheets(settings), store.records()), ensure_ascii=False))
+            sheets = GoogleSheets(settings)
+            reference = sheets.reference(
+                {
+                    "keywords": settings.reference_keywords(),
+                    "rules": [
+                        dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                        for row in default_rules()
+                    ],
+                }
+            )
+            print(
+                json.dumps(
+                    sync_review_queues(sheets, store.records(), reference["rules"]), ensure_ascii=False
+                )
+            )
     finally:
         store.close()
     return 0

@@ -1,3 +1,4 @@
+import re
 import time
 from urllib.parse import quote, urlencode
 
@@ -128,6 +129,104 @@ class GoogleSheets:
             result[title]["cleared"] = cleanup["cleared"]
             result[title]["written_rows"] += cleanup["written_rows"]
         return result
+
+    def reference(self, defaults):
+        """Load editable keywords/rules, creating a human-friendly source once."""
+        title = "Справочник"
+        if not self.target_sheet(title):
+            self._write_reference(defaults)
+            return defaults
+        rows = self.values("'Справочник'!A1:J1000")
+        if not rows or not any(rows[0]):
+            self._write_reference(defaults)
+            return defaults
+        keyword_at = next((i for i, row in enumerate(rows) if row and row[0] == "Ключевики"), None)
+        filter_at = next((i for i, row in enumerate(rows) if row and row[0] == "Фильтры отбора"), None)
+        if keyword_at is None or filter_at is None:
+            raise SheetsError("Reference tab layout was changed; restore its section headings")
+        keywords, rules = [], []
+        for row in rows[keyword_at + 2 : filter_at]:
+            row = row + [""] * 10
+            if row[0] and row[4].strip().lower() not in {"нет", "false", "0"}:
+                keywords.append({"category": row[1], "label": row[2], "query": row[3]})
+        for row in rows[filter_at + 2 :]:
+            row = row + [""] * 10
+            if not row[0]:
+                continue
+            if row[7].strip().lower() in {"нет", "false", "0"}:
+                continue
+            if row[2] not in {"direct", "partner", "non_target"}:
+                raise SheetsError(f"Reference rule {row[0]} has an unknown route")
+            try:
+                priority = int(row[1])
+                for pattern in filter(None, (row[4] + "\n" + row[5]).splitlines()):
+                    re.compile(pattern.removeprefix("!"), re.I)
+            except (ValueError, re.error) as error:
+                raise SheetsError(f"Reference rule {row[0]} is invalid") from error
+            rules.append(
+                {
+                    "id": row[0],
+                    "priority": priority,
+                    "bucket": row[2],
+                    "name": row[3],
+                    "all": row[4],
+                    "any": row[5],
+                    "reason": row[6],
+                    "enabled": True,
+                }
+            )
+        if not keywords or not rules:
+            raise SheetsError("Reference has no active keywords or filters")
+        return {"keywords": keywords, "rules": rules}
+
+    def _write_reference(self, defaults):
+        sheet = self.target_sheet("Справочник", create=True)
+        rows = [
+            ["Справочник поиска"],
+            ["Меняйте только строки таблиц. Изменения применяются при следующем ежедневном запуске."],
+            [],
+            ["Ключевики"],
+            ["ID", "Категория", "Направление", "Запрос TenderLand", "Активно", "Комментарий"],
+        ]
+        for index, item in enumerate(defaults["keywords"], 1):
+            rows.append([f"keyword-{index:03d}", item["category"], item["label"], item["query"], "да", ""])
+        rows += [
+            [],
+            ["Фильтры отбора"],
+            [
+                "ID",
+                "Приоритет",
+                "Маршрут",
+                "Название",
+                "Все условия (каждое с новой строки; ! = нет)",
+                "Любое условие",
+                "Причина",
+                "Активно",
+                "Комментарий",
+            ],
+        ]
+        for item in defaults["rules"]:
+            rows.append(
+                [
+                    item["id"],
+                    item["priority"],
+                    item["bucket"],
+                    item["name"],
+                    item["all"],
+                    item["any"],
+                    item["reason"],
+                    "да",
+                    "",
+                ]
+            )
+        prefix = "'Справочник'"
+        self.request(
+            "/values/" + quote(prefix + "!A1:I" + str(len(rows)), safe="") + "?valueInputOption=RAW",
+            "PUT",
+            {"values": rows},
+        )
+        self.format_sheet(sheet["sheetId"])
+        self.format_data(sheet["sheetId"], len(rows))
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)

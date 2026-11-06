@@ -37,15 +37,21 @@ class Settings:
     def queries(self):
         return json.loads(self.queries_file.read_text(encoding="utf-8-sig"))
 
-    def jobs(self):
-        for category, group in self.queries().items():
-            for query in dict.fromkeys(group["queries"].split()):
-                for mode in self.search_modes:
-                    for scope in self.scopes:
-                        yield {
-                            "category": category,
-                            "label": group["label"],
-                            "query": query,
-                            "mode": mode,
-                            "scope": scope,
-                        }
+    def jobs(self, keywords=None):
+        for item in keywords or self.reference_keywords():
+            for mode in self.search_modes:
+                for scope in self.scopes:
+                    yield {
+                        "category": item["category"],
+                        "label": item["label"],
+                        "query": item["query"],
+                        "mode": mode,
+                        "scope": scope,
+                    }
+
+    def reference_keywords(self):
+        return [
+            {"category": category, "label": group["label"], "query": query}
+            for category, group in self.queries().items()
+            for query in dict.fromkeys(group["queries"].split())
+        ]
