@@ -170,16 +170,16 @@ class GoogleSheets:
         writes = []
         if not rows or not any(rows[0]):
             writes.append({"range": f"{prefix}!A1:AA1", "values": [HEADERS]})
-        free_rows = [number for number, row in enumerate(rows[1:], 2) if not any(row)]
-        next_row = max(2, len(rows) + 1)
+        # Every managed queue is rendered as a compact list.  Previously we reused
+        # holes left by records moved to another tab, which made the sheet look
+        # randomly sparse.  The database remains the source of truth, so placing
+        # rows consecutively is safe and keeps links/reasons with their tender.
+        next_row = 2
         new_count, updated_count = 0, 0
         for record in records:
-            number = index.get(record["id"])
-            if number is None:
-                if free_rows:
-                    number = free_rows.pop(0)
-                else:
-                    number, next_row = next_row, next_row + 1
+            number = next_row
+            next_row += 1
+            if record["id"] not in index:
                 new_count += 1
             values = sheet_row(record, record.get("_decision"))
             old = rows[number - 1] if number <= len(rows) else []
@@ -208,7 +208,11 @@ class GoogleSheets:
         # Destination rows have been verified above. Now clear stale copies of
         # managed TenderLand IDs, preserving other rows and any manual notes.
         expected_ids = {str(record["id"]) for record in records}
-        stale = [number for tender_id, number in index.items() if tender_id in managed_ids - expected_ids]
+        stale = [
+            number
+            for tender_id, number in index.items()
+            if tender_id in managed_ids - expected_ids or number >= next_row
+        ]
         for offset in range(0, len(stale), 100):
             clear_batch = [
                 {"range": f"{prefix}!A{number}:AA{number}", "values": [[""] * columns]}

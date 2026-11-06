@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import pytest
 
 from tender_search.config import Settings
-from tender_search.model import HEADERS, merge, normalize
+from tender_search.model import HEADERS, merge, normalize, sheet_row
 from tender_search.sheets import GoogleSheets, SheetsError
 
 
@@ -114,3 +114,13 @@ def test_wrong_headers_are_never_overwritten():
     with pytest.raises(SheetsError, match="headers"):
         GoogleSheets(Settings(spreadsheet_id="test"), session=fake).sync([record()])
     assert fake.writes == []
+
+
+def test_existing_rows_are_compacted_after_a_move():
+    fake = FakeSheet()
+    row = record()
+    fake.rows += [[], sheet_row(row)]
+    result = GoogleSheets(Settings(spreadsheet_id="test"), session=fake).sync([row])
+    assert result["cleared"] == 1
+    assert fake.rows[1][0] == "123"
+    assert not any(fake.rows[2])
