@@ -363,7 +363,6 @@ class TenderLand:
         soup = BeautifulSoup(html, "html.parser")
         found, seen = [], set()
         extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z")
-        markers = re.compile(r"документ|документац|извещен|тз|технич|договор|смет|чертеж|проект", re.I)
         excluded = re.compile(r"политик|согласи|реклам|cookie|конфиденц|privacy|презентац.*этп", re.I)
         base_host = urlparse(page_url).hostname or ""
         base_zone = ".".join(base_host.split(".")[-2:])
@@ -385,7 +384,7 @@ class TenderLand:
             raw_title = anchor.get_text(" ", strip=True) or anchor.get("title", "")
             signal = (href + " " + raw_title).lower()
             document_path = re.search(
-                r"/(?:download|file|files|document|documents|attachment|attachments)(?:/|$|[?])",
+                r"/(?:download|file|files|attachment|attachments)(?:/|$|[?])",
                 parsed.path,
                 re.I,
             )
@@ -394,7 +393,6 @@ class TenderLand:
                 any(extension in signal for extension in extensions)
                 or bool(document_path)
                 or (id(anchor) in section_links and same_zone)
-                or (bool(raw_title) and markers.search(raw_title) and same_zone)
             )
             if not candidate or excluded.search(signal):
                 continue
