@@ -176,6 +176,9 @@ class DriveArchive:
         """Return archive rows. ZIP members become individual Google Drive files."""
         content, source_mime = self.download(document["url"])
         source_name = safe_name(document["title"])
+        # TenderLand's file endpoint commonly replies as octet-stream.  Drive
+        # needs the actual Office MIME type to convert DOCX/XLSX/PPTX.
+        source_mime = mimetypes.guess_type(source_name)[0] or source_mime
         folder_id = self.tender_folder(record)
         digest = hashlib.sha256(content).hexdigest()
         # DOCX/XLSX/PPTX are ZIP-based internally, but must stay whole so

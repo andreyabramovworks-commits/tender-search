@@ -44,8 +44,11 @@ def archive_documents(store, records, settings, limit=None):
     candidates = []
     for document in store.documents(list(by_id)):
         likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
+        tenderland_file = "/File/Get?storageId=" in document["url"]
         if document["kind"] in {"tenderland_card", "source_entry"} or (
-            document["archive_status"] in {"archived", "download_failed"} and not likely_zip
+            document["archive_status"] == "archived" and not likely_zip
+        ) or (
+            document["archive_status"] == "download_failed" and not tenderland_file
         ):
             continue
         candidates.append(document)
