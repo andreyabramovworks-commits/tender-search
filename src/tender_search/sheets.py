@@ -251,7 +251,20 @@ class GoogleSheets:
             raise SheetsError("Document registry headers differ; refusing to overwrite")
         # Entry pages are retained in PostgreSQL for audit, but this tab is for
         # actual tender attachments. Showing landing pages here misled reviewers.
-        attachments = [x for x in documents if x["kind"] not in {"tenderland_card", "source_entry"}]
+        attachments = []
+        seen_content = set()
+        for document in documents:
+            if document["kind"] in {"tenderland_card", "source_entry"}:
+                continue
+            # A platform can publish identical files separately and as a ZIP.
+            # Keep one usable Drive link per tender/file, while PostgreSQL keeps
+            # every source URL for audit and future retry.
+            fingerprint = (document["tender_id"], document.get("sha256"))
+            if document.get("sha256") and fingerprint in seen_content:
+                continue
+            if document.get("sha256"):
+                seen_content.add(fingerprint)
+            attachments.append(document)
         rows = [headers] + [
             [
                 x["tender_id"],
