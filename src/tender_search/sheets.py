@@ -464,6 +464,8 @@ class GoogleSheets:
         title = "AI-анализ"
         headers = [
             "ID TenderLand",
+            "Ссылка TenderLand",
+            "Решение менеджера",
             "Статус",
             "Приоритет",
             "Объект закупки",
@@ -475,11 +477,10 @@ class GoogleSheets:
             "Доказательства и ссылки",
             "Нужен ручной доступ",
             "Актуально на МСК",
-            "Решение менеджера",
         ]
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
-        existing = self.values(prefix + "!A1:M2")
+        existing = self.values(prefix + "!A1:N2")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("AI analysis headers differ; refusing to overwrite")
         if not existing or not any(existing[0]):
