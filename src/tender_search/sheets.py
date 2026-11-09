@@ -40,7 +40,8 @@ class GoogleSheets:
                 if retry and attempt < 4:
                     time.sleep(2**attempt)
                     continue
-            raise SheetsError(f"Google Sheets HTTP {response.status_code}; verify API and spreadsheet access")
+            detail = response.text[:500].replace("\n", " ")
+            raise SheetsError(f"Google Sheets HTTP {response.status_code}: {detail}")
         raise SheetsError("Google Sheets retry limit exceeded")
 
     def metadata(self):
