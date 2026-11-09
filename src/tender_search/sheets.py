@@ -305,12 +305,15 @@ class GoogleSheets:
                 link_end = link_start + len(url)
                 if label:
                     runs.append({"startIndex": position, "format": {}})
-                runs.extend(
-                    [
-                        {"startIndex": link_start, "format": {"link": {"uri": url}}},
-                        {"startIndex": link_end, "format": {}},
-                    ]
-                )
+                # zip:// is an internal audit pointer after unpacking. Google
+                # Sheets only accepts public HTTP(S) addresses as rich links.
+                if url.startswith(("https://", "http://")):
+                    runs.extend(
+                        [
+                            {"startIndex": link_start, "format": {"link": {"uri": url}}},
+                            {"startIndex": link_end, "format": {}},
+                        ]
+                    )
                 position += len(text)
             value = "\n".join(parts)
             # Google Sheets does not accept a run that starts after the final
