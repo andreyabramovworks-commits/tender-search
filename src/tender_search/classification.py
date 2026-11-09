@@ -19,6 +19,15 @@ def default_rules():
     # all: every line must match. Prefix a line with ! to require its absence.
     return [
         (
+            "exclude-byn-currency",
+            1,
+            NON_TARGET,
+            "Валюта: белорусские рубли",
+            "",
+            r"\b(?:byn|белорусск\w*\s+рубл\w*|бел\.?\s*руб\w*)\b",
+            "Исключено: цена указана в белорусских рублях (BYN)",
+        ),
+        (
             "exclude-uav-design-only",
             70,
             NON_TARGET,
@@ -220,7 +229,10 @@ def _matches(text, rule):
 
 
 def classify(record, rules=None):
-    text = " ".join(str(record.get(key, "")) for key in ("title", "lot_names")).lower()
+    # Currency is a TenderLand field, not necessarily a word in the title. It
+    # is deliberately part of the rule text so the editable reference filter
+    # can route BYN records before a matching product keyword is considered.
+    text = " ".join(str(record.get(key, "")) for key in ("title", "lot_names", "currency")).lower()
     if rules is None:
         rules = [
             dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))

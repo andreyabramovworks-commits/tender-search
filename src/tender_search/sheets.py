@@ -199,7 +199,29 @@ class GoogleSheets:
         # Newly shipped safety rules take effect even before an administrator
         # opens the reference tab; existing user-edited rules keep precedence.
         present = {rule["id"] for rule in rules}
-        rules.extend(rule for rule in defaults["rules"] if rule["id"] not in present)
+        missing_rules = [rule for rule in defaults["rules"] if rule["id"] not in present]
+        if missing_rules:
+            # Shipped safety filters must be visible and editable, not only
+            # silently applied in memory. Append them below the existing filter
+            # list so no user-authored rule is moved or overwritten.
+            first_free = next(
+                (index for index in range(filter_at + 2, len(rows)) if not rows[index] or not rows[index][0]),
+                len(rows),
+            )
+            values = [
+                [
+                    rule["id"], rule["priority"], rule["bucket"], rule["name"],
+                    rule["all"], rule["any"], rule["reason"], "да", "",
+                ]
+                for rule in missing_rules
+            ]
+            self.request(
+                "/values/" + quote(f"'Справочник'!A{first_free + 1}:I{first_free + len(values)}", safe="")
+                + "?valueInputOption=RAW",
+                "PUT",
+                {"values": values},
+            )
+        rules.extend(missing_rules)
         self._write_operator_help()
         return {"keywords": keywords, "rules": rules}
 
