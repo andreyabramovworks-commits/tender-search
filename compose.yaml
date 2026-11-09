@@ -77,7 +77,7 @@ services:
       - ${TENDER_ROOT:-.}/secrets:/run/secrets:ro
       - ${TENDER_ROOT:-.}/shared/data:/app/data
     ports:
-      - "127.0.0.1:8091:8080"
+      - "127.0.0.1:18091:8080"
     restart: unless-stopped
     command: ["python", "-m", "tender_search.panel"]
 
