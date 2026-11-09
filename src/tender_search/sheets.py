@@ -543,10 +543,15 @@ class GoogleSheets:
         rows = self.values("'AI-анализ'!A1:N1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
+        ai_id_rows = [
+            (row_index, str(row[0]))
+            for row_index, row in enumerate(rows[1:], start=2)
+            if row and str(row[0]).strip()
+        ]
         stale_rows = [
             row_index
-            for row_index, row in enumerate(rows[1:], start=2)
-            if row and str(row[0]).strip() and str(row[0]) not in document_ids
+            for row_index, tender_id in ai_id_rows
+            if tender_id not in document_ids
         ]
         for row_index in reversed(stale_rows):
             self.request(
@@ -567,7 +572,7 @@ class GoogleSheets:
                     ]
                 },
             )
-        return {"removed": len(stale_rows), "kept": len(rows) - 1 - len(stale_rows)}
+        return {"removed": len(stale_rows), "kept": len(ai_id_rows) - len(stale_rows)}
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
