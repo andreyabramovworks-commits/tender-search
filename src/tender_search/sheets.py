@@ -250,12 +250,17 @@ class GoogleSheets:
             "ID TenderLand", "Тип", "Документ", "Ссылка первоисточника", "Ссылка Google Drive",
             "Статус архива", "Доступ", "SHA-256", "Найдено",
         ]
+        current_headers = [
+            "ID TenderLand", "Название тендера", "Тип", "Документ", "Ссылка первоисточника",
+            "Ссылка Google Drive", "Статус архива", "Доступ", "SHA-256", "Найдено",
+        ]
         legacy_headers = ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"]
         if (
             existing
             and any(existing[0])
             and existing[0] != headers
             and existing[0] != prior_headers
+            and existing[0] != current_headers
             and existing[0] != legacy_headers
         ):
             raise SheetsError("Document registry headers differ; refusing to overwrite")
