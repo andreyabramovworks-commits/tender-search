@@ -42,15 +42,14 @@ def archive_documents(store, records, settings):
     archive = DriveArchive(settings)
     archived = 0
     for document in store.documents(list(by_id)):
-        if (
-            document["kind"] in {"tenderland_card", "source_entry"}
-            or document["archive_status"] == "archived"
+        likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
+        if document["kind"] in {"tenderland_card", "source_entry"} or (
+            document["archive_status"] == "archived" and not likely_zip
         ):
             continue
         record = by_id[document["tender_id"]]
         try:
-            results = archive.archive(record, document)
-            is_zip = document["kind"].lower() == "zip" or document["title"].lower().endswith(".zip")
+            results, is_zip = archive.archive(record, document)
             if is_zip:
                 store.set_archive_result(document["tender_id"], document["url"], None, "unpacked")
                 for title, kind, drive_url, digest in results:

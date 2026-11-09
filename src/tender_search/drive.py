@@ -135,7 +135,14 @@ class DriveArchive:
         source_name = safe_name(document["title"])
         folder_id = self.tender_folder(record)
         digest = hashlib.sha256(content).hexdigest()
-        if document["kind"].lower() != "zip" and not source_name.lower().endswith(".zip"):
+        # Some tender platforms expose a ZIP through a generic download URL or
+        # name it "Скачать все файлы".  The bytes, not the label, are decisive.
+        is_zip = (
+            content[:4] == b"PK\x03\x04"
+            or document["kind"].lower() == "zip"
+            or source_name.lower().endswith(".zip")
+        )
+        if not is_zip:
             return [
                 (
                     source_name,
@@ -143,7 +150,7 @@ class DriveArchive:
                     self.upload(folder_id, source_name, content, source_mime),
                     digest,
                 )
-            ]
+            ], False
         results = []
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             for member in archive.infolist():
@@ -165,4 +172,4 @@ class DriveArchive:
                 )
         if not results:
             raise DriveError("ZIP contains no eligible files")
-        return results
+        return results, True
