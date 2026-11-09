@@ -58,5 +58,28 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  panel:
+    image: tender-search:${RELEASE_SHA:-local}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender_search}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-tender_search}
+      TENDERLAND_CREDENTIALS_FILE: /run/secrets/tenderland.json
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-service-account.json
+      GOOGLE_SPREADSHEET_ID: ${GOOGLE_SPREADSHEET_ID:-}
+      GOOGLE_SHEET_TITLE: ${GOOGLE_SHEET_TITLE:-Тендеры}
+      GOOGLE_DRIVE_FOLDER_ID: ${GOOGLE_DRIVE_FOLDER_ID:-}
+      GOOGLE_DRIVE_OAUTH_TOKEN_FILE: /run/secrets/google-drive-oauth.json
+      DATA_DIR: /app/data
+      TZ: Europe/Moscow
+    volumes:
+      - ${TENDER_ROOT:-.}/secrets:/run/secrets:ro
+      - ${TENDER_ROOT:-.}/shared/data:/app/data
+    ports:
+      - "127.0.0.1:8091:8080"
+    restart: unless-stopped
+    command: ["python", "-m", "tender_search.panel"]
+
 volumes:
   pgdata:
