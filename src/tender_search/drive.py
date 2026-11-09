@@ -78,7 +78,8 @@ class DriveArchive:
     def request(self, method, url, **kwargs):
         response = self.session.request(method, url, timeout=60, **kwargs)
         if response.status_code >= 400:
-            raise DriveError(f"Google Drive HTTP {response.status_code}")
+            detail = response.text.replace("\n", " ").replace("\r", " ")[:300]
+            raise DriveError(f"Google Drive HTTP {response.status_code}: {detail}")
         return response.json() if response.content else {}
 
     def folder(self, parent_id, name):
