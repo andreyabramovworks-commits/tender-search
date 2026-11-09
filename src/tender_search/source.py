@@ -304,7 +304,7 @@ class TenderLand:
             entity = json.JSONDecoder().raw_decode(response.text.split("let entityModel = ", 1)[1])[0]
         except (IndexError, ValueError) as error:
             raise SourceError("TenderLand detail page changed or session expired") from error
-        if str(entity.get("MainInfo", {}).get("Id")) != record["id"]:
+        if str(entity.get("MainInfo", {}).get("Id")) != str(record["id"]):
             raise SourceError("TenderLand detail is unavailable or belongs to another tender")
         self.entities[record["id"]] = entity
         return entity
