@@ -337,6 +337,9 @@ def main():
             )
             client = TenderLand(settings)
             try:
+                # Document lists are available from the authenticated TenderLand
+                # card, not from an anonymous browser session.
+                client.login()
                 print(
                     json.dumps(
                         discover_and_sync_documents(
