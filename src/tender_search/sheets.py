@@ -274,6 +274,11 @@ class GoogleSheets:
         for document in documents:
             if document["kind"] in {"tenderland_card", "source_entry"}:
                 continue
+            # Old archive attempts could expand Office containers into their
+            # internal XML members. They are audit artefacts, never useful
+            # tender documents for a manager and must not pollute the sheet.
+            if document["url"].startswith("zip://") or document["access_status"] == "archived_from_zip":
+                continue
             # A platform can publish identical files separately and as a ZIP.
             # Keep one usable Drive link per tender/file, while PostgreSQL keeps
             # every source URL for audit and future retry.
@@ -332,7 +337,8 @@ class GoogleSheets:
         rows, link_cells = [headers], []
         for tender_id, group in grouped.items():
             items = group["documents"]
-            source_text, source_runs = links_cell(items, "url")
+            tenderland_items = [x for x in items if x["access_status"] == "tenderland_download"]
+            source_text, source_runs = links_cell(tenderland_items or items, "url")
             drive_text, drive_runs = links_cell(items, "archive_url", with_title=True)
             rows.append(
                 [
