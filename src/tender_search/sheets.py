@@ -178,6 +178,10 @@ class GoogleSheets:
             )
         if not keywords or not rules:
             raise SheetsError("Reference has no active keywords or filters")
+        # Newly shipped safety rules take effect even before an administrator
+        # opens the reference tab; existing user-edited rules keep precedence.
+        present = {rule["id"] for rule in rules}
+        rules.extend(rule for rule in defaults["rules"] if rule["id"] not in present)
         return {"keywords": keywords, "rules": rules}
 
     def _write_reference(self, defaults):
@@ -497,9 +501,10 @@ class GoogleSheets:
                     ]
                 },
             )
-        rows = self.values(f"{prefix}!A1:AA{max_rows}")
+        rows = self.values(f"{prefix}!A1:AD{max_rows}")
         if rows and any(rows[0]) and rows[0] != HEADERS:
-            raise SheetsError("Target headers differ; refusing to overwrite another table")
+            if rows[0] != HEADERS[:-1]:
+                raise SheetsError("Target headers differ; refusing to overwrite another table")
         index = {}
         for number, row in enumerate(rows[1:], 2):
             if not row or not row[0]:
@@ -511,8 +516,8 @@ class GoogleSheets:
                 raise SheetsError(f"Duplicate tender ID in spreadsheet: {tender_id}")
             index[tender_id] = number
         writes = []
-        if not rows or not any(rows[0]):
-            writes.append({"range": f"{prefix}!A1:AA1", "values": [HEADERS]})
+        if not rows or not any(rows[0]) or rows[0] != HEADERS:
+            writes.append({"range": f"{prefix}!A1:AD1", "values": [HEADERS]})
         # Every managed queue is rendered as a compact list.  Previously we reused
         # holes left by records moved to another tab, which made the sheet look
         # randomly sparse.  The database remains the source of truth, so placing
@@ -528,7 +533,7 @@ class GoogleSheets:
             old = rows[number - 1] if number <= len(rows) else []
             old = [str(x) for x in old] + [""] * (columns - len(old))
             if old != values:
-                writes.append({"range": f"{prefix}!A{number}:AA{number}", "values": [values]})
+                writes.append({"range": f"{prefix}!A{number}:AD{number}", "values": [values]})
                 updated_count += int(record["id"] in index)
         if next_row - 1 > max_rows:
             self.request(
@@ -558,7 +563,7 @@ class GoogleSheets:
         ]
         for offset in range(0, len(stale), 100):
             clear_batch = [
-                {"range": f"{prefix}!A{number}:AA{number}", "values": [[""] * columns]}
+                {"range": f"{prefix}!A{number}:AD{number}", "values": [[""] * columns]}
                 for number in stale[offset : offset + 100]
             ]
             self.request("/values:batchUpdate", "POST", {"valueInputOption": "RAW", "data": clear_batch})

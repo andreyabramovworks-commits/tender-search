@@ -123,6 +123,7 @@ HEADERS = [
     "Дата торгов",
     "Часовой пояс источника",
     "Названия лотов",
+    "Фильтр распределения",
 ]
 
 
@@ -175,5 +176,6 @@ def sheet_row(record, decision=None):
             record["bidding_at"],
             record["timezone_offset"],
             record["lot_names"],
+        decision.rule_name if decision else "",
         ]
     ]
