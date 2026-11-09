@@ -234,14 +234,13 @@ class GoogleSheets:
             [
                 "ID TenderLand",
                 "Название тендера",
-                "Тип",
-                "Документ",
-                "Ссылка первоисточника",
-                "Ссылка Google Drive",
-                "Статус архива",
+                "",
+                "",
+                "Ссылки первоисточников",
+                "Документы в Google Drive",
+                "Статусы архива",
                 "Доступ",
-                "SHA-256",
-                "Найдено",
+                "Обновлено",
             ],
         )
         sheet = self.target_sheet(title, create=True)
@@ -276,21 +275,33 @@ class GoogleSheets:
             if document.get("sha256"):
                 seen_content.add(fingerprint)
             attachments.append(document)
-        rows = [headers] + [
-            [
-                x["tender_id"],
-                x.get("tender_title", ""),
-                x["kind"],
-                x["title"],
-                x["url"],
-                x.get("archive_url") or "",
-                x.get("archive_status") or "pending",
-                x["access_status"],
-                x["sha256"] or "",
-                x["discovered_at"],
-            ]
-            for x in attachments
-        ]
+        grouped = {}
+        for document in attachments:
+            group = grouped.setdefault(
+                document["tender_id"],
+                {"title": document.get("tender_title", ""), "documents": []},
+            )
+            group["documents"].append(document)
+        rows = [headers]
+        for tender_id, group in grouped.items():
+            items = group["documents"]
+            rows.append(
+                [
+                    tender_id,
+                    group["title"],
+                    "",
+                    "",
+                    "\n".join(x["url"] for x in items),
+                    "\n".join(
+                        f"{x['title']}: {x['archive_url']}"
+                        for x in items
+                        if x.get("archive_url")
+                    ),
+                    "\n".join(sorted({x.get("archive_status") or "pending" for x in items})),
+                    "\n".join(sorted({x["access_status"] for x in items})),
+                    max(x["discovered_at"] for x in items),
+                ]
+            )
         if len(rows) > sheet["gridProperties"]["rowCount"]:
             self.request(
                 ":batchUpdate",
@@ -309,19 +320,36 @@ class GoogleSheets:
                     ]
                 },
             )
-        writes = [{"range": prefix + f"!A{i}:J{i}", "values": [row]} for i, row in enumerate(rows, 1)]
+        writes = [{"range": prefix + f"!A{i}:I{i}", "values": [row]} for i, row in enumerate(rows, 1)]
         old_end = len(existing)
         for i in range(len(rows) + 1, old_end + 1):
-            writes.append({"range": prefix + f"!A{i}:J{i}", "values": [[""] * len(headers)]})
+            writes.append({"range": prefix + f"!A{i}:J{i}", "values": [[""] * 10]})
         for offset in range(0, len(writes), 100):
             self.request(
                 "/values:batchUpdate",
                 "POST",
                 {"valueInputOption": "RAW", "data": writes[offset : offset + 100]},
             )
+        # C and D are deliberately hidden: the concise view begins with the
+        # tender identity and keeps the full Drive document set in column F.
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {
+                "requests": [
+                    {
+                        "updateDimensionProperties": {
+                            "range": {"sheetId": sheet["sheetId"], "dimension": "COLUMNS", "startIndex": 2, "endIndex": 4},
+                            "properties": {"hiddenByUser": True},
+                            "fields": "hiddenByUser",
+                        }
+                    }
+                ]
+            },
+        )
         if not existing or not any(existing[0]):
             self.format_sheet(sheet["sheetId"])
-        return {"rows": len(attachments)}
+        return {"rows": len(grouped), "documents": len(attachments)}
 
     def ensure_ai_analysis(self):
         title = "AI-анализ"
