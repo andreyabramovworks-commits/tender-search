@@ -256,10 +256,11 @@ class GoogleSheets:
             "Ссылка Google Drive", "Статус архива", "Доступ", "SHA-256", "Найдено",
         ]
         legacy_headers = ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"]
+        normalized_header = existing_header[: len(headers)]
         if (
             existing
             and any(existing_header)
-            and existing_header != headers
+            and normalized_header != headers
             and existing_header != prior_headers
             and existing_header != current_headers
             and existing_header != legacy_headers
