@@ -284,6 +284,15 @@ class GoogleSheets:
                 seen_content.add(fingerprint)
             attachments.append(document)
         grouped = {}
+        # Keep the registry aligned one-to-one with the target-tender queue.
+        # A tender can temporarily have no public attachment: it must still be
+        # visible as an empty row instead of silently disappearing from the
+        # document workflow.
+        for document in documents:
+            grouped.setdefault(
+                document["tender_id"],
+                {"title": document.get("tender_title", ""), "documents": []},
+            )
         for document in attachments:
             group = grouped.setdefault(
                 document["tender_id"],
