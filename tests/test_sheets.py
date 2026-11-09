@@ -50,7 +50,7 @@ class FakeSheet:
                 }
             )
         if method == "GET" and "/values/" in parsed.path:
-            assert unquote(parsed.path).endswith("!A1:AA1000")
+            assert unquote(parsed.path).endswith("!A1:AD1000")
             return Response({"values": self.rows})
         if method == "POST" and parsed.path.endswith("/values:batchUpdate"):
             assert json["valueInputOption"] == "RAW"
