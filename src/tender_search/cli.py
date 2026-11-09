@@ -291,6 +291,7 @@ def main():
     archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
     inspect_files = sub.add_parser("inspect-tenderland-files")
     inspect_files.add_argument("--id", required=True, help="TenderLand ID for authenticated file-route diagnostics")
+    sub.add_parser("inspect-document-sheet")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -339,6 +340,10 @@ def main():
                 LOG.info("Google Sheets read access: OK (writing is verified by sync)")
         finally:
             client.close()
+        return 0
+    if args.command == "inspect-document-sheet":
+        sheets = GoogleSheets(settings)
+        print(json.dumps(sheets.values("'Документы'!A1:I5"), ensure_ascii=False))
         return 0
     store = Store(settings.database_url)
     try:
