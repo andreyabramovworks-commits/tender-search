@@ -361,13 +361,17 @@ def main():
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
         elif args.command == "sync-documents":
             sheets = GoogleSheets(settings)
-            tender_ids = [record["id"] for record in store.records()]
+            # The registry is the document queue for direct work only, never
+            # the full historical database of target/partner/non-target rows.
+            tender_ids = [
+                record["id"] for record in store.records() if classify(record).bucket == DIRECT
+            ]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
         elif args.command == "archive-documents":
             if args.limit < 1:
                 parser.error("--limit must be positive")
-            records = store.records()
+            records = [record for record in store.records() if classify(record).bucket == DIRECT]
             result = archive_documents(store, records, settings, limit=args.limit)
             result.update(sheets.sync_documents(store.documents([record["id"] for record in records])))
             print(json.dumps(result, ensure_ascii=False))
