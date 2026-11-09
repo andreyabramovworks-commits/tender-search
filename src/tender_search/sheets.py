@@ -182,7 +182,22 @@ class GoogleSheets:
         # opens the reference tab; existing user-edited rules keep precedence.
         present = {rule["id"] for rule in rules}
         rules.extend(rule for rule in defaults["rules"] if rule["id"] not in present)
+        self._write_operator_help()
         return {"keywords": keywords, "rules": rules}
+
+    def _write_operator_help(self):
+        """Keep the private operator-panel access instructions beside rules."""
+        rows = [
+            ["Панель управления"],
+            ["Адрес в браузере", "http://localhost:18091"],
+            ["PowerShell-команда", 'ssh -i "C:\\Users\\Andrey\\Documents\\ChatGPT\\Скрипт для тендоров\\.secrets\\server_ed25519" -L 18091:127.0.0.1:18091 codex-rtm@62.109.6.159'],
+            ["Как открыть", "Запустить команду, не закрывать окно PowerShell, затем открыть адрес выше."],
+        ]
+        self.request(
+            "/values/" + quote("'Справочник'!K1:L4", safe="") + "?valueInputOption=RAW",
+            "PUT",
+            {"values": rows},
+        )
 
     def _write_reference(self, defaults):
         sheet = self.target_sheet("Справочник", create=True)

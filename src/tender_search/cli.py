@@ -300,6 +300,7 @@ def main():
     sub.add_parser("status")
     sub.add_parser("sync")
     sub.add_parser("sync-documents")
+    sub.add_parser("rebuild-documents")
     sub.add_parser("sync-queues")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
@@ -411,6 +412,22 @@ def main():
             # the full historical database of target/partner/non-target rows.
             tender_ids = [
                 record["id"] for record in store.records() if classify(record).bucket == DIRECT
+            ]
+            print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
+            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "rebuild-documents":
+            sheets = GoogleSheets(settings)
+            reference = sheets.reference(
+                {
+                    "keywords": settings.reference_keywords(),
+                    "rules": [
+                        dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                        for row in default_rules()
+                    ],
+                }
+            )
+            tender_ids = [
+                record["id"] for record in store.records() if classify(record, reference["rules"]).bucket == DIRECT
             ]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))

@@ -11,6 +11,7 @@ JOBS = {
     "collect-documents": ("Собрать ссылки TenderLand", ["collect-documents"]),
     "archive-documents": ("Загрузить 20 документов в Drive", ["archive-documents", "--limit", "20"]),
     "sync-documents": ("Обновить вкладку Документы", ["sync-documents"]),
+    "rebuild-documents": ("Пересобрать Документы по Тендерам", ["rebuild-documents"]),
     "run": ("Полный ежедневный поиск", ["run"]),
 }
 STATE = {"status": "idle", "job": "", "label": "Ожидание команды", "output": "", "progress": 0}
@@ -43,6 +44,7 @@ PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><title>Tender Search 
 <div class=card><h3>Собрать ссылки TenderLand</h3><p>Обновить список файлов в карточках TenderLand. Файлы не скачиваются.</p><button data-job=collect-documents>Запустить</button></div>
 <div class=card><h3>Загрузить документы</h3><p>Скачать до 20 реальных документов в Google Drive и обновить столбец F.</p><button data-job=archive-documents>Запустить</button></div>
 <div class=card><h3>Обновить «Документы»</h3><p>Опубликовать текущие ссылки и статусы в Google Таблице.</p><button data-job=sync-documents>Запустить</button></div>
+<div class=card><h3>Пересобрать «Документы»</h3><p>Оставить только тендеры из вкладки «Тендеры», убрать лишние строки и добавить недостающие.</p><button data-job=rebuild-documents>Запустить</button></div>
 <div class=card><h3>Полный ежедневный поиск</h3><p>Искать TenderLand по ключевикам, фильтровать и синхронизировать очереди.</p><button data-job=run>Запустить</button></div></div>
 <div class=status><b id=label>Загрузка…</b><p id=percent>0%</p><div class=bar><div id=fill class=fill></div></div><pre id=out></pre></div></div>
 <script>async function state(){let s=await fetch('/api/state').then(x=>x.json());label.textContent=s.label;percent.textContent=s.progress+'%';fill.style.width=s.progress+'%';out.textContent=s.output;document.querySelectorAll('button').forEach(b=>b.disabled=s.status==='running')}document.querySelectorAll('button').forEach(b=>b.onclick=async()=>{await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job:b.dataset.job})});state()});state();setInterval(state,2000)</script>"""
