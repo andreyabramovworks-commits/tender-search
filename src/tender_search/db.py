@@ -202,7 +202,11 @@ class Store:
                 TenderDocument.tender_id == int(tender_id),
                 TenderDocument.kind.notin_(("tenderland_card", "source_entry")),
             ).delete(synchronize_session=False)
+            seen = set()
             for document in documents:
+                if document["url"] in seen:
+                    continue
+                seen.add(document["url"])
                 session.add(
                     TenderDocument(
                         tender_id=int(tender_id),
