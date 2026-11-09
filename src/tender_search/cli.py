@@ -146,6 +146,36 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
     return result
 
 
+def refresh_without_search(settings):
+    """Refresh queues, documents and the AI registry without a new TenderLand search."""
+    store = Store(settings.database_url)
+    try:
+        sheets = GoogleSheets(settings)
+        reference = sheets.reference(
+            {
+                "keywords": settings.reference_keywords(),
+                "rules": [
+                    dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                    for row in default_rules()
+                ],
+            }
+        )
+        records = store.records()
+        summary = {"queues": sync_review_queues(sheets, records, reference["rules"])}
+        client = TenderLand(settings)
+        try:
+            client.login()
+            summary["documents"] = discover_and_sync_documents(
+                store, sheets, client, records, reference["rules"]
+            )
+        finally:
+            client.close()
+        summary["ai_analysis"] = sheets.clean_ai_analysis()
+        return summary
+    finally:
+        store.close()
+
+
 def export_snapshot(settings, run_id, summary, records):
     folder = settings.data_dir / "reports"
     folder.mkdir(parents=True, exist_ok=True)
@@ -302,6 +332,8 @@ def main():
     sub.add_parser("sync-documents")
     sub.add_parser("rebuild-documents")
     sub.add_parser("sync-queues")
+    sub.add_parser("clean-ai-analysis")
+    sub.add_parser("refresh-workflow")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
@@ -431,6 +463,14 @@ def main():
             ]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "clean-ai-analysis":
+            sheets = GoogleSheets(settings)
+            print(json.dumps(sheets.clean_ai_analysis(), ensure_ascii=False))
+        elif args.command == "refresh-workflow":
+            # This is intentionally separate from `run`: no search queries are
+            # sent to TenderLand, but all existing queues and document records
+            # are reconciled before the AI registry is pruned by TenderLand ID.
+            print(json.dumps(refresh_without_search(settings), ensure_ascii=False))
         elif args.command == "sync-queues":
             sheets = GoogleSheets(settings)
             reference = sheets.reference(

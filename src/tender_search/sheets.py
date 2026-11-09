@@ -12,6 +12,24 @@ class SheetsError(RuntimeError):
     pass
 
 
+AI_ANALYSIS_HEADERS = [
+    "ID TenderLand",
+    "Ссылка TenderLand",
+    "Решение AI",
+    "Решение менеджера",
+    "Комментарий",
+    "Объект закупки",
+    "Наши работы",
+    "Цена и сроки",
+    "Риски",
+    "Недостающие документы",
+    "Вопросы заказчику",
+    "Доказательства и ссылки",
+    "Нужен ручной доступ",
+    "Актуально на МСК",
+]
+
+
 class GoogleSheets:
     def __init__(self, settings, session=None):
         self.settings = settings
@@ -462,22 +480,7 @@ class GoogleSheets:
 
     def ensure_ai_analysis(self):
         title = "AI-анализ"
-        headers = [
-            "ID TenderLand",
-            "Ссылка TenderLand",
-            "Решение менеджера",
-            "Статус",
-            "Приоритет",
-            "Объект закупки",
-            "Наши работы",
-            "Цена и сроки",
-            "Риски",
-            "Недостающие документы",
-            "Вопросы заказчику",
-            "Доказательства и ссылки",
-            "Нужен ручной доступ",
-            "Актуально на МСК",
-        ]
+        headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
         existing = self.values(prefix + "!A1:N2")
@@ -487,10 +490,84 @@ class GoogleSheets:
             self.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:M1", "values": [headers]}]},
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:N1", "values": [headers]}]},
             )
-            self.format_sheet(sheet["sheetId"])
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": sheet["sheetId"],
+                                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 4},
+                                },
+                                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                            }
+                        },
+                        {
+                            "setDataValidation": {
+                                "range": {
+                                    "sheetId": sheet["sheetId"],
+                                    "startRowIndex": 1,
+                                    "endRowIndex": 1000,
+                                    "startColumnIndex": 3,
+                                    "endColumnIndex": 4,
+                                },
+                                "rule": {
+                                    "condition": {"type": "BOOLEAN"},
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                },
+                            }
+                        },
+                    ]
+                },
+            )
         return {"headers": len(headers)}
+
+    def clean_ai_analysis(self):
+        """Remove whole AI rows whose tender disappeared from the document registry.
+
+        Rows are deleted, never reconstructed cell-by-cell: manager checkboxes,
+        comments and colours therefore stay attached to their TenderLand ID.
+        """
+        ai_sheet = self.target_sheet("AI-анализ", create=True)
+        self.ensure_ai_analysis()
+        document_ids = {
+            str(row[0])
+            for row in self.values("'Документы'!A2:A1000")
+            if row and str(row[0]).strip()
+        }
+        rows = self.values("'AI-анализ'!A1:N1000")
+        if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("AI analysis headers differ; refusing to delete rows")
+        stale_rows = [
+            row_index
+            for row_index, row in enumerate(rows[1:], start=2)
+            if row and str(row[0]).strip() and str(row[0]) not in document_ids
+        ]
+        for row_index in reversed(stale_rows):
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "deleteDimension": {
+                                "range": {
+                                    "sheetId": ai_sheet["sheetId"],
+                                    "dimension": "ROWS",
+                                    "startIndex": row_index - 1,
+                                    "endIndex": row_index,
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+        return {"removed": len(stale_rows), "kept": len(rows) - 1 - len(stale_rows)}
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
