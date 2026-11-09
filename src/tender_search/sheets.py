@@ -287,26 +287,52 @@ class GoogleSheets:
                 {"title": document.get("tender_title", ""), "documents": []},
             )
             group["documents"].append(document)
-        rows = [headers]
+        def links_cell(items, url_key, with_title=False):
+            parts, runs, position = [], [], 0
+            for item in items:
+                url = item.get(url_key) or ""
+                if not url:
+                    continue
+                label = f"{item['title']}: " if with_title else ""
+                text = label + url
+                if parts:
+                    position += 1  # newline between independently clickable links
+                parts.append(text)
+                link_start = position + len(label)
+                link_end = link_start + len(url)
+                if label:
+                    runs.append({"startIndex": position, "format": {}})
+                runs.extend(
+                    [
+                        {"startIndex": link_start, "format": {"link": {"uri": url}}},
+                        {"startIndex": link_end, "format": {}},
+                    ]
+                )
+                position += len(text)
+            value = "\n".join(parts)
+            # Google Sheets does not accept a run that starts after the final
+            # character; terminal reset runs are therefore unnecessary.
+            return value, [run for run in runs if run["startIndex"] < len(value)]
+
+        rows, link_cells = [headers], []
         for tender_id, group in grouped.items():
             items = group["documents"]
+            source_text, source_runs = links_cell(items, "url")
+            drive_text, drive_runs = links_cell(items, "archive_url", with_title=True)
             rows.append(
                 [
                     tender_id,
                     group["title"],
                     "",
                     "",
-                    "\n".join(x["url"] for x in items),
-                    "\n".join(
-                        f"{x['title']}: {x['archive_url']}"
-                        for x in items
-                        if x.get("archive_url")
-                    ),
+                    source_text,
+                    drive_text,
                     "\n".join(sorted({x.get("archive_status") or "pending" for x in items})),
                     "\n".join(sorted({x["access_status"] for x in items})),
                     max(x["discovered_at"] for x in items),
                 ]
             )
+            link_cells.append((source_text, source_runs, drive_text, drive_runs))
         if len(rows) > sheet["gridProperties"]["rowCount"]:
             self.request(
                 ":batchUpdate",
@@ -334,6 +360,40 @@ class GoogleSheets:
                 "/values:batchUpdate",
                 "POST",
                 {"valueInputOption": "RAW", "data": writes[offset : offset + 100]},
+            )
+        # A plain cell value can only auto-detect one link.  Rich-text runs make
+        # every URL in E and F independently clickable for people and the AI.
+        for offset in range(0, len(link_cells), 100):
+            segment = link_cells[offset : offset + 100]
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateCells": {
+                                "start": {
+                                    "sheetId": sheet["sheetId"],
+                                    "rowIndex": offset + 1,
+                                    "columnIndex": 4,
+                                },
+                                "rows": [
+                                    {
+                                        "values": [
+                                            {
+                                                "userEnteredValue": {"stringValue": source_text},
+                                                "textFormatRuns": source_runs,
+                                            },
+                                            {"userEnteredValue": {"stringValue": drive_text}, "textFormatRuns": drive_runs},
+                                        ]
+                                    }
+                                    for source_text, source_runs, drive_text, drive_runs in segment
+                                ],
+                                "fields": "userEnteredValue,textFormatRuns",
+                            }
+                        }
+                    ]
+                },
             )
         # C and D are deliberately hidden: the concise view begins with the
         # tender identity and keeps the full Drive document set in column F.
