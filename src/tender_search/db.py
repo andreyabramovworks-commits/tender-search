@@ -71,6 +71,8 @@ class TenderDocument(Base):
     url: Mapped[str] = mapped_column(String(4000))
     access_status: Mapped[str] = mapped_column(String(80), default="unknown")
     content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    archive_url: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    archive_status: Mapped[str] = mapped_column(String(80), default="pending")
     document_metadata: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -190,23 +192,35 @@ class Store:
                             title=document["title"],
                             url=document["url"],
                             access_status=document["access_status"],
+                            archive_status="pending",
                             document_metadata={},
                             discovered_at=datetime.now(UTC),
                         )
                     )
 
     def replace_document_links(self, tender_id, documents):
-        """Refresh crawler output without touching the two audit entry links."""
+        """Refresh source links while preserving successfully archived Drive copies."""
         with Session(self.engine) as session, session.begin():
-            session.query(TenderDocument).filter(
-                TenderDocument.tender_id == int(tender_id),
-                TenderDocument.kind.notin_(("tenderland_card", "source_entry")),
-            ).delete(synchronize_session=False)
+            existing = {
+                x.url: x
+                for x in session.scalars(
+                    select(TenderDocument).where(TenderDocument.tender_id == int(tender_id))
+                )
+            }
             seen = set()
             for document in documents:
                 if document["url"] in seen:
                     continue
                 seen.add(document["url"])
+                if document["url"] in existing:
+                    row = existing[document["url"]]
+                    row.kind, row.title, row.access_status, row.discovered_at = (
+                        document["kind"],
+                        document["title"],
+                        document["access_status"],
+                        datetime.now(UTC),
+                    )
+                    continue
                 session.add(
                     TenderDocument(
                         tender_id=int(tender_id),
@@ -214,6 +228,7 @@ class Store:
                         title=document["title"],
                         url=document["url"],
                         access_status=document["access_status"],
+                        archive_status="pending",
                         document_metadata={},
                         discovered_at=datetime.now(UTC),
                     )
@@ -232,10 +247,56 @@ class Store:
                     "url": x.url,
                     "access_status": x.access_status,
                     "sha256": x.content_sha256,
+                    "archive_url": x.archive_url,
+                    "archive_status": x.archive_status,
                     "discovered_at": x.discovered_at.isoformat(),
                 }
                 for x in session.scalars(statement)
             ]
+
+    def set_archive_result(self, tender_id, source_url, archive_url, status, sha256=None):
+        with Session(self.engine) as session, session.begin():
+            row = session.scalar(
+                select(TenderDocument).where(
+                    TenderDocument.tender_id == int(tender_id), TenderDocument.url == source_url
+                )
+            )
+            if row:
+                row.archive_url = archive_url
+                row.archive_status = status
+                row.content_sha256 = sha256
+
+    def add_extracted_document(self, tender_id, source_url, title, kind, archive_url, sha256):
+        with Session(self.engine) as session, session.begin():
+            url = f"zip://{source_url}#{title}"
+            row = session.scalar(
+                select(TenderDocument).where(
+                    TenderDocument.tender_id == int(tender_id), TenderDocument.url == url
+                )
+            )
+            if row:
+                row.title, row.kind, row.archive_url, row.archive_status, row.content_sha256 = (
+                    title,
+                    kind,
+                    archive_url,
+                    "archived",
+                    sha256,
+                )
+                return
+            session.add(
+                TenderDocument(
+                    tender_id=int(tender_id),
+                    kind=kind,
+                    title=title,
+                    url=url,
+                    access_status="archived_from_zip",
+                    archive_url=archive_url,
+                    archive_status="archived",
+                    content_sha256=sha256,
+                    document_metadata={"source_archive": source_url},
+                    discovered_at=datetime.now(UTC),
+                )
+            )
 
     def status(self):
         with Session(self.engine) as session:

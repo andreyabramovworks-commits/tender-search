@@ -2,14 +2,17 @@ import argparse
 import json
 import logging
 import sys
+import zipfile
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+import requests
 from dotenv import load_dotenv
 
 from .classification import DIRECT, NON_TARGET, PARTNER, classify, default_rules
 from .config import Settings
 from .db import Store
+from .drive import DriveArchive, DriveError
 from .sheets import GoogleSheets
 from .source import SourceError, TenderLand
 
@@ -31,6 +34,43 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+def archive_documents(store, records, settings):
+    """Copy public attachments to Drive only after their link discovery succeeds."""
+    if not settings.google_drive_folder_id:
+        return {"archived": 0, "skipped": "GOOGLE_DRIVE_FOLDER_ID is missing"}
+    by_id = {x["id"]: x for x in records}
+    archive = DriveArchive(settings)
+    archived = 0
+    for document in store.documents(list(by_id)):
+        if (
+            document["kind"] in {"tenderland_card", "source_entry"}
+            or document["archive_status"] == "archived"
+        ):
+            continue
+        record = by_id[document["tender_id"]]
+        try:
+            results = archive.archive(record, document)
+            is_zip = document["kind"].lower() == "zip" or document["title"].lower().endswith(".zip")
+            if is_zip:
+                store.set_archive_result(document["tender_id"], document["url"], None, "unpacked")
+                for title, kind, drive_url, digest in results:
+                    store.add_extracted_document(
+                        document["tender_id"], document["url"], title, kind, drive_url, digest
+                    )
+                    archived += 1
+            else:
+                _, _, drive_url, digest = results[0]
+                store.set_archive_result(
+                    document["tender_id"], document["url"], drive_url, "archived", digest
+                )
+                archived += 1
+        except (DriveError, requests.RequestException, ValueError, zipfile.BadZipFile) as error:
+            LOG.warning(
+                "Drive archive unavailable for tender %s: %s", document["tender_id"], type(error).__name__
+            )
+    return {"archived": archived}
+
+
 def discover_and_sync_documents(store, sheets, client, records, rules):
     """Collect attachment URLs for direct tenders, then publish only attachments.
 
@@ -44,11 +84,19 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
     for record in direct_records:
         try:
             links = client.discover_documents(record)
+            # The entry pages are audit records, not attachments. Never let a
+            # crawler rediscover one and collide with its unique database row.
+            links = [
+                link
+                for link in links
+                if link["url"] not in {record.get("url", ""), record.get("source_url", "")}
+            ]
             store.replace_document_links(record["id"], links)
             discovered += len(links)
         except Exception as error:  # One unavailable procurement site must not stop the daily run.
             LOG.warning("Document links unavailable for tender %s: %s", record["id"], type(error).__name__)
-    result = sheets.sync_documents(store.documents(direct_ids))
+    result = archive_documents(store, direct_records, client.settings)
+    result.update(sheets.sync_documents(store.documents(direct_ids)))
     result["scanned_tenders"] = len(direct_records)
     result["new_links_seen"] = discovered
     return result

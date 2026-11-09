@@ -231,12 +231,23 @@ class GoogleSheets:
     def sync_documents(self, documents):
         title, headers = (
             "Документы",
-            ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"],
+            [
+                "ID TenderLand",
+                "Тип",
+                "Документ",
+                "Ссылка первоисточника",
+                "Ссылка Google Drive",
+                "Статус архива",
+                "Доступ",
+                "SHA-256",
+                "Найдено",
+            ],
         )
         sheet = self.target_sheet(title, create=True)
         prefix = "'Документы'"
-        existing = self.values(prefix + "!A1:G10000")
-        if existing and any(existing[0]) and existing[0] != headers:
+        existing = self.values(prefix + "!A1:I10000")
+        legacy_headers = ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"]
+        if existing and any(existing[0]) and existing[0] != headers and existing[0] != legacy_headers:
             raise SheetsError("Document registry headers differ; refusing to overwrite")
         # Entry pages are retained in PostgreSQL for audit, but this tab is for
         # actual tender attachments. Showing landing pages here misled reviewers.
@@ -247,6 +258,8 @@ class GoogleSheets:
                 x["kind"],
                 x["title"],
                 x["url"],
+                x.get("archive_url") or "",
+                x.get("archive_status") or "pending",
                 x["access_status"],
                 x["sha256"] or "",
                 x["discovered_at"],
@@ -271,10 +284,10 @@ class GoogleSheets:
                     ]
                 },
             )
-        writes = [{"range": prefix + f"!A{i}:G{i}", "values": [row]} for i, row in enumerate(rows, 1)]
+        writes = [{"range": prefix + f"!A{i}:I{i}", "values": [row]} for i, row in enumerate(rows, 1)]
         old_end = len(existing)
         for i in range(len(rows) + 1, old_end + 1):
-            writes.append({"range": prefix + f"!A{i}:G{i}", "values": [[""] * len(headers)]})
+            writes.append({"range": prefix + f"!A{i}:I{i}", "values": [[""] * len(headers)]})
         for offset in range(0, len(writes), 100):
             self.request(
                 "/values:batchUpdate",
