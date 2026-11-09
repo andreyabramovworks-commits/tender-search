@@ -254,6 +254,7 @@ def main():
     sub.add_parser("check")
     sub.add_parser("status")
     sub.add_parser("sync")
+    sub.add_parser("sync-documents")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -328,6 +329,11 @@ def main():
                 )
             finally:
                 client.close()
+            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "sync-documents":
+            sheets = GoogleSheets(settings)
+            tender_ids = [record["id"] for record in store.records()]
+            print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
     finally:
         store.close()
