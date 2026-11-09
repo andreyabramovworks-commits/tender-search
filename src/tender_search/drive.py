@@ -150,10 +150,10 @@ class DriveArchive:
             raise DriveError("Tender link returned a web page, not a file")
         return data, response.headers.get("Content-Type", "application/octet-stream")
 
-    def upload(self, folder_id, name, content, source_mime):
+    def upload(self, folder_id, name, content, source_mime, convert=True):
         extension = PurePosixPath(name).suffix.lower()
         metadata = {"name": safe_name(name), "parents": [folder_id]}
-        if extension in NATIVE_TYPES:
+        if convert and extension in NATIVE_TYPES:
             metadata["mimeType"] = NATIVE_TYPES[extension]
         boundary = "tender-search-" + uuid.uuid4().hex
         body = b"\r\n".join(
@@ -187,14 +187,16 @@ class DriveArchive:
         # attachment explicitly identified as a .zip archive.
         is_zip = document["kind"].lower() == "zip" or source_name.lower().endswith(".zip")
         if not is_zip:
-            return [
-                (
-                    source_name,
-                    document["kind"],
-                    self.upload(folder_id, source_name, content, source_mime),
-                    digest,
-                )
-            ], False
+            try:
+                drive_url = self.upload(folder_id, source_name, content, source_mime)
+            except DriveError as error:
+                # Some supplier-generated Office files use an unsupported
+                # variant. Keep the original file in Drive rather than lose
+                # the tender; it remains viewable/downloadable by the manager.
+                if "Conversion of the uploaded content" not in str(error):
+                    raise
+                drive_url = self.upload(folder_id, source_name, content, source_mime, convert=False)
+            return [(source_name, document["kind"], drive_url, digest)], False
         results = []
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             for member in archive.infolist():

@@ -404,6 +404,7 @@ def main():
         elif args.command == "archive-documents":
             if args.limit < 1:
                 parser.error("--limit must be positive")
+            sheets = GoogleSheets(settings)
             records = [record for record in store.records() if classify(record).bucket == DIRECT]
             result = archive_documents(store, records, settings, limit=args.limit)
             result.update(sheets.sync_documents(store.documents([record["id"] for record in records])))
