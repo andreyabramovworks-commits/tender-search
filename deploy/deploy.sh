@@ -19,7 +19,7 @@ git --git-dir="$ROOT/repo.git" archive "$sha" | tar -x -C "$release"
 export RELEASE_SHA="$sha" TENDER_ROOT="$ROOT"
 compose=(docker compose --env-file "$ROOT/shared/.env" -p tender-search -f "$release/compose.yaml")
 "${compose[@]}" build app
-"${compose[@]}" up -d --wait db
+"${compose[@]}" up -d --wait db panel
 # Backup before migrations; refuse to continue on a failed backup/migration.
 mkdir -p "$ROOT/shared/backups"
 "${compose[@]}" exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > "$ROOT/shared/backups/pre-${sha}-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
