@@ -280,6 +280,7 @@ def main():
     sub.add_parser("status")
     sub.add_parser("sync")
     sub.add_parser("sync-documents")
+    sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
     inspect_files = sub.add_parser("inspect-tenderland-files")
@@ -379,6 +380,21 @@ def main():
             ]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "collect-documents":
+            sheets = GoogleSheets(settings)
+            records = [record for record in store.records() if classify(record).bucket == DIRECT]
+            client = TenderLand(settings)
+            try:
+                client.login()
+                for record in records:
+                    try:
+                        links = client.discover_tenderland_documents(record)
+                        store.replace_document_links(record["id"], links)
+                    except SourceError as error:
+                        LOG.warning("TenderLand files unavailable for tender %s: %s", record["id"], error)
+            finally:
+                client.close()
+            print(json.dumps(sheets.sync_documents(store.documents([record["id"] for record in records])), ensure_ascii=False))
         elif args.command == "archive-documents":
             if args.limit < 1:
                 parser.error("--limit must be positive")

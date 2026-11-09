@@ -61,6 +61,19 @@ class DriveArchive:
         self.base = "https://www.googleapis.com/drive/v3"
         self.upload_base = "https://www.googleapis.com/upload/drive/v3"
         self.folders = {}
+        self.tenderland_session = requests.Session()
+        self.tenderland_session.headers.update({"User-Agent": "Mozilla/5.0 tender-search/1.0"})
+        credentials_data = json.loads(settings.credentials_file.read_text(encoding="utf-8-sig"))
+        login = self.tenderland_session.post(
+            "https://tenderland.ru/Account/Login",
+            data={
+                "login": credentials_data["username"],
+                "password": credentials_data["password"],
+                "returnUrl": "/Search/Entities?type=Pro",
+            },
+            timeout=60,
+        )
+        login.raise_for_status()
 
     def request(self, method, url, **kwargs):
         response = self.session.request(method, url, timeout=60, **kwargs)
@@ -107,7 +120,8 @@ class DriveArchive:
                 "Accept": "text/html,application/pdf,application/octet-stream,*/*;q=0.8",
             }
         )
-        response = session.get(url, timeout=60, allow_redirects=True)
+        active_session = self.tenderland_session if url.startswith("https://tenderland.ru/") else session
+        response = active_session.get(url, timeout=60, allow_redirects=True)
         response.raise_for_status()
         if "text/html" in response.headers.get("Content-Type", "").lower():
             page = BeautifulSoup(response.text, "html.parser")

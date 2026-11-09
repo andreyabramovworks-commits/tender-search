@@ -342,7 +342,11 @@ class TenderLand:
         documents, seen = [], set()
         for group in self.entity(record).get("Files", []):
             for item in group.get("Value", []):
-                url = (item.get("SourceLink") or "").strip()
+                storage_id = item.get("ConvertedStorageId") or item.get("StorageId")
+                # The card itself renders this authenticated endpoint as the
+                # "Скачать" link.  It is more reliable than SourceLink, which
+                # often leads to a procurement-platform landing page.
+                url = f"{BASE}/File/Get?storageId={storage_id}" if storage_id else (item.get("SourceLink") or "").strip()
                 if not url.startswith(("https://", "http://")) or url in seen:
                     continue
                 seen.add(url)
@@ -352,7 +356,7 @@ class TenderLand:
                         "title": item.get("Name") or f"Документ TenderLand {item.get('Id', '')}",
                         "url": url,
                         "kind": extension,
-                        "access_status": "tenderland_indexed",
+                        "access_status": "tenderland_download",
                     }
                 )
         return documents
