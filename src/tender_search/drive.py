@@ -112,6 +112,20 @@ class DriveArchive:
         month = self.folder(year, f"{published.month:02d}")
         return self.folder(month, safe_name(f"{record['id']} — {record['title']}"))
 
+    def purge_office_artifacts(self, record):
+        """Move only pre-existing Office-container debris to Drive trash."""
+        folder_id = self.tender_folder(record)
+        data = self.request(
+            "GET", self.base + "/files", params={"q": f"'{folder_id}' in parents and trashed = false", "fields": "files(id,name)", "pageSize": 1000}
+        )
+        deleted = 0
+        for item in data.get("files", []):
+            name = item["name"].lower()
+            if name in {"[content_types].xml", "rels"} or name.endswith((".xml", ".xml.rels")):
+                self.request("PATCH", self.base + "/files/" + item["id"], json={"trashed": True})
+                deleted += 1
+        return deleted
+
     def download(self, url):
         """Download an attachment and resolve a public download landing page."""
         session = requests.Session()

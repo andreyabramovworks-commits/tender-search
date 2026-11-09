@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from .model import normalize
 
 BASE = "https://tenderland.ru"
+ARCHIVABLE_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp", "zip", "rar", "7z", "dwg", "dxf", "jpg", "jpeg", "png"}
 DESIRED_FIELDS = [
     "tender_id",
     "tender_name",
@@ -351,6 +352,8 @@ class TenderLand:
                     continue
                 seen.add(url)
                 extension = (item.get("Extension") or "").lower().lstrip(".") or "other"
+                if extension not in ARCHIVABLE_EXTENSIONS:
+                    continue
                 documents.append(
                     {
                         "title": item.get("Name") or f"Документ TenderLand {item.get('Id', '')}",

@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    delete,
     select,
     text,
 )
@@ -258,6 +259,16 @@ class Store:
                 }
                 for x, payload in session.execute(statement)
             ]
+
+    def delete_extracted_artifacts(self, tender_id):
+        with Session(self.engine) as session, session.begin():
+            result = session.execute(
+                delete(TenderDocument).where(
+                    TenderDocument.tender_id == int(tender_id),
+                    TenderDocument.access_status == "archived_from_zip",
+                )
+            )
+            return result.rowcount
 
     def set_archive_result(self, tender_id, source_url, archive_url, status, sha256=None):
         with Session(self.engine) as session, session.begin():

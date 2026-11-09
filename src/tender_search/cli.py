@@ -306,6 +306,8 @@ def main():
     inspect_files = sub.add_parser("inspect-tenderland-files")
     inspect_files.add_argument("--id", required=True, help="TenderLand ID for authenticated file-route diagnostics")
     sub.add_parser("inspect-document-sheet")
+    cleanup = sub.add_parser("cleanup-tender-artifacts")
+    cleanup.add_argument("--id", required=True, help="Tender ID whose prior Office XML artefacts will be moved to Drive trash")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -428,6 +430,16 @@ def main():
             result = archive_documents(store, records, settings, limit=args.limit)
             result.update(sheets.sync_documents(store.documents([record["id"] for record in records])))
             print(json.dumps(result, ensure_ascii=False))
+        elif args.command == "cleanup-tender-artifacts":
+            record = next((x for x in store.records() if str(x["id"]) == str(args.id)), None)
+            if not record:
+                parser.error("Tender ID not found")
+            removed_drive = DriveArchive(settings).purge_office_artifacts(record)
+            removed_db = store.delete_extracted_artifacts(record["id"])
+            sheets = GoogleSheets(settings)
+            direct_ids = [x["id"] for x in store.records() if classify(x).bucket == DIRECT]
+            sheets.sync_documents(store.documents(direct_ids))
+            print(json.dumps({"drive_trashed": removed_drive, "registry_removed": removed_db}, ensure_ascii=False))
     finally:
         store.close()
     return 0
