@@ -340,9 +340,10 @@ class TenderLand:
             return []
         found = self._document_links(response.text, response.url)
         # Many procurement systems add their attachment cards after JavaScript
-        # opens an accordion. Render such sparse pages before declaring that a
-        # tender has only one document. No attachment payload is downloaded.
-        if len(found) < 3:
+        # opens an accordion. Render only pages with no static attachment at all
+        # so an unavailable platform cannot stall the full daily run. No payload
+        # is downloaded.
+        if not found:
             found = self._merge_document_links(found, self._rendered_document_links(source_url))
         return found
 
@@ -421,11 +422,7 @@ class TenderLand:
                 browser = playwright.chromium.launch(headless=True)
                 page = browser.new_page()
                 try:
-                    page.goto(
-                        source_url,
-                        wait_until="domcontentloaded",
-                        timeout=self.settings.timeout_seconds * 1000,
-                    )
+                    page.goto(source_url, wait_until="domcontentloaded", timeout=12_000)
                     page.locator("button, summary, [role=button]").evaluate_all(
                         """elements => elements.filter(x => /документ|документац|файл/i.test(x.innerText || ''))
                         .forEach(x => x.click())"""
