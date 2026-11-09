@@ -300,6 +300,7 @@ def main():
     sub.add_parser("status")
     sub.add_parser("sync")
     sub.add_parser("sync-documents")
+    sub.add_parser("sync-queues")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
@@ -413,6 +414,18 @@ def main():
             ]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "sync-queues":
+            sheets = GoogleSheets(settings)
+            reference = sheets.reference(
+                {
+                    "keywords": settings.reference_keywords(),
+                    "rules": [
+                        dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                        for row in default_rules()
+                    ],
+                }
+            )
+            print(json.dumps(sync_review_queues(sheets, store.records(), reference["rules"]), ensure_ascii=False))
         elif args.command == "collect-documents":
             sheets = GoogleSheets(settings)
             records = [record for record in store.records() if classify(record).bucket == DIRECT]
