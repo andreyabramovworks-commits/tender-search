@@ -342,9 +342,13 @@ class GoogleSheets:
                     "",
                     source_text,
                     drive_text,
-                    "\n".join(sorted({x.get("archive_status") or "pending" for x in items})),
-                    "\n".join(sorted({x["access_status"] for x in items})),
-                    max(x["discovered_at"] for x in items),
+                    "\n".join(sorted({x.get("archive_status") or "pending" for x in items}))
+                    if items
+                    else "нет документов",
+                    "\n".join(sorted({x["access_status"] for x in items}))
+                    if items
+                    else "не найдено в TenderLand",
+                    max((x["discovered_at"] for x in items), default=""),
                 ]
             )
             link_cells.append((source_text, source_runs, drive_text, drive_runs))
