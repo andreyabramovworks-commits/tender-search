@@ -81,9 +81,25 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
     store.seed_document_links(direct_records)
     discovered = 0
     for record in direct_records:
+        tenderland_links = []
+        source_links = []
         try:
             tenderland_links = client.discover_tenderland_documents(record)
+        except Exception as error:  # A card may disappear while its original platform remains available.
+            LOG.warning(
+                "TenderLand files unavailable for tender %s: %s",
+                record["id"],
+                str(error)[:180],
+            )
+        try:
             source_links = client.discover_documents(record)
+        except Exception as error:  # The external source is only a supplementary discovery route.
+            LOG.warning(
+                "Source files unavailable for tender %s: %s",
+                record["id"],
+                str(error)[:180],
+            )
+        try:
             links = client._merge_document_links(tenderland_links, source_links)
             # The entry pages are audit records, not attachments. Never let a
             # crawler rediscover one and collide with its unique database row.
@@ -95,7 +111,7 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
             store.replace_document_links(record["id"], links)
             discovered += len(links)
         except Exception as error:  # One unavailable procurement site must not stop the daily run.
-            LOG.warning("Document links unavailable for tender %s: %s", record["id"], type(error).__name__)
+            LOG.warning("Document registry unavailable for tender %s: %s", record["id"], str(error)[:180])
     result = archive_documents(store, direct_records, client.settings)
     result.update(sheets.sync_documents(store.documents(direct_ids)))
     result["scanned_tenders"] = len(direct_records)
