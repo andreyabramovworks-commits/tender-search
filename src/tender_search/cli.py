@@ -54,8 +54,22 @@ def archive_documents(store, records, settings, limit=None):
         candidates.append(document)
     # Prefer TenderLand's authenticated file store.  Older SourceLink rows are
     # retained for audit/fallback, but must not consume the archive batch first.
-    candidates.sort(key=lambda document: 0 if "/File/Get?storageId=" in document["url"] else 1)
-    for document in candidates[:limit] if limit else candidates:
+    candidates.sort(
+        key=lambda document: (0 if "/File/Get?storageId=" in document["url"] else 1, document["tender_id"])
+    )
+    # A batch must expand coverage across tenders before it fills one huge
+    # package.  That creates visible tender folders promptly and makes the
+    # document queue useful while the full archive is still running.
+    selected, selected_ids = [], set()
+    for document in candidates:
+        if document["tender_id"] not in selected_ids:
+            selected.append(document)
+            selected_ids.add(document["tender_id"])
+            if limit and len(selected) >= limit:
+                break
+    if not limit:
+        selected = candidates
+    for document in selected:
         record = by_id[document["tender_id"]]
         try:
             results, is_zip = archive.archive(record, document)
