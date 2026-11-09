@@ -236,12 +236,17 @@ class Store:
 
     def documents(self, tender_ids=None):
         with Session(self.engine) as session:
-            statement = select(TenderDocument).order_by(TenderDocument.tender_id, TenderDocument.id)
+            statement = (
+                select(TenderDocument, Tender.payload)
+                .join(Tender, Tender.id == TenderDocument.tender_id)
+                .order_by(TenderDocument.tender_id, TenderDocument.id)
+            )
             if tender_ids is not None:
                 statement = statement.where(TenderDocument.tender_id.in_([int(x) for x in tender_ids]))
             return [
                 {
                     "tender_id": str(x.tender_id),
+                    "tender_title": (payload or {}).get("title", ""),
                     "kind": x.kind,
                     "title": x.title,
                     "url": x.url,
@@ -251,7 +256,7 @@ class Store:
                     "archive_status": x.archive_status,
                     "discovered_at": x.discovered_at.isoformat(),
                 }
-                for x in session.scalars(statement)
+                for x, payload in session.execute(statement)
             ]
 
     def set_archive_result(self, tender_id, source_url, archive_url, status, sha256=None):
