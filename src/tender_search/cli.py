@@ -49,6 +49,9 @@ def archive_documents(store, records, settings, limit=None):
         ):
             continue
         candidates.append(document)
+    # Prefer TenderLand's authenticated file store.  Older SourceLink rows are
+    # retained for audit/fallback, but must not consume the archive batch first.
+    candidates.sort(key=lambda document: 0 if "/File/Get?storageId=" in document["url"] else 1)
     for document in candidates[:limit] if limit else candidates:
         record = by_id[document["tender_id"]]
         try:
