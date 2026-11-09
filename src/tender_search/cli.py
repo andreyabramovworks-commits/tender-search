@@ -282,6 +282,8 @@ def main():
     sub.add_parser("sync-documents")
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
+    inspect_files = sub.add_parser("inspect-tenderland-files")
+    inspect_files.add_argument("--id", required=True, help="TenderLand ID for authenticated file-route diagnostics")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -292,10 +294,18 @@ def main():
         if args.limit_jobs is not None and args.limit_jobs < 1:
             parser.error("--limit-jobs must be positive")
         return run(settings, args)
-    if args.command in {"probe", "validate-keywords", "check"}:
+    if args.command in {"probe", "validate-keywords", "check", "inspect-tenderland-files"}:
         client = TenderLand(settings)
         try:
             client.login()
+            if args.command == "inspect-tenderland-files":
+                record = {"id": args.id}
+                entity = client.entity(record)
+                page = client.entity_pages[args.id]
+                positions = [page.find("StorageId"), page.find("ConvertedStorageId"), page.find("SourceLink")]
+                excerpts = [page[max(0, pos - 500) : pos + 1000] for pos in positions if pos >= 0]
+                print(json.dumps({"files": entity.get("Files", []), "page_excerpts": excerpts}, ensure_ascii=False))
+                return 0
             for mode in settings.search_modes:
                 client.open_mode(mode)
                 LOG.info("TenderLand %s: access OK", mode)

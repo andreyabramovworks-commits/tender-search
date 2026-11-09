@@ -67,6 +67,7 @@ class TenderLand:
         )
         self.pages = {}
         self.entities = {}
+        self.entity_pages = {}
         self.available_fields = {}
         self.request_count = 0
 
@@ -300,6 +301,7 @@ class TenderLand:
         if record["id"] in self.entities:
             return self.entities[record["id"]]
         response = self.request("GET", "/Entity/Tender", params={"id": record["id"]})
+        self.entity_pages[record["id"]] = response.text
         try:
             entity = json.JSONDecoder().raw_decode(response.text.split("let entityModel = ", 1)[1])[0]
         except (IndexError, ValueError) as error:
