@@ -246,6 +246,7 @@ class GoogleSheets:
         sheet = self.target_sheet(title, create=True)
         prefix = "'Документы'"
         existing = self.values(prefix + "!A1:J10000")
+        existing_header = [(value or "") for value in existing[0]] if existing else []
         prior_headers = [
             "ID TenderLand", "Тип", "Документ", "Ссылка первоисточника", "Ссылка Google Drive",
             "Статус архива", "Доступ", "SHA-256", "Найдено",
@@ -257,11 +258,11 @@ class GoogleSheets:
         legacy_headers = ["ID TenderLand", "Тип", "Документ", "Ссылка", "Доступ", "SHA-256", "Найдено"]
         if (
             existing
-            and any(existing[0])
-            and existing[0] != headers
-            and existing[0] != prior_headers
-            and existing[0] != current_headers
-            and existing[0] != legacy_headers
+            and any(existing_header)
+            and existing_header != headers
+            and existing_header != prior_headers
+            and existing_header != current_headers
+            and existing_header != legacy_headers
         ):
             raise SheetsError("Document registry headers differ; refusing to overwrite")
         # Entry pages are retained in PostgreSQL for audit, but this tab is for
