@@ -44,7 +44,7 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
     for record in direct_records:
         try:
             links = client.discover_documents(record)
-            store.add_document_links(record["id"], links)
+            store.replace_document_links(record["id"], links)
             discovered += len(links)
         except Exception as error:  # One unavailable procurement site must not stop the daily run.
             LOG.warning("Document links unavailable for tender %s: %s", record["id"], type(error).__name__)

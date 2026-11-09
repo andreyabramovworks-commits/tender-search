@@ -338,26 +338,104 @@ class TenderLand:
                 return []
         except requests.RequestException:
             return []
-        soup = BeautifulSoup(response.text, "html.parser")
+        found = self._document_links(response.text, response.url)
+        # Many procurement systems add their attachment cards after JavaScript
+        # opens an accordion. Render such sparse pages before declaring that a
+        # tender has only one document. No attachment payload is downloaded.
+        if len(found) < 3:
+            found = self._merge_document_links(found, self._rendered_document_links(source_url))
+        return found
+
+    @staticmethod
+    def _merge_document_links(*groups):
+        merged, seen = [], set()
+        for group in groups:
+            for document in group:
+                if document["url"] not in seen:
+                    seen.add(document["url"])
+                    merged.append(document)
+        return merged
+
+    @staticmethod
+    def _document_links(html, page_url):
+        """Extract all likely attachments, including links inside a docs block."""
+        soup = BeautifulSoup(html, "html.parser")
         found, seen = [], set()
         extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z")
+        markers = re.compile(r"документ|документац|извещен|тз|технич|договор|смет|чертеж|проект", re.I)
+        excluded = re.compile(r"политик|согласи|реклам|cookie|конфиденц|privacy|презентац.*этп", re.I)
+        base_host = urlparse(page_url).hostname or ""
+        base_zone = ".".join(base_host.split(".")[-2:])
+
+        document_sections = []
+        for element in soup.find_all(["details", "section", "article", "div", "li"]):
+            attributes = " ".join([element.get("id", ""), *element.get("class", [])])
+            if re.search(r"document|doc|attach|file|влож", attributes, re.I):
+                document_sections.append(element)
+        section_links = {
+            id(anchor) for section in document_sections for anchor in section.find_all("a", href=True)
+        }
+
         for anchor in soup.find_all("a", href=True):
-            href = urljoin(response.url, anchor["href"].strip())
-            if urlparse(href).scheme not in {"http", "https"}:
+            href = urljoin(page_url, anchor["href"].strip())
+            parsed = urlparse(href)
+            if parsed.scheme not in {"http", "https"}:
                 continue
-            title = anchor.get_text(" ", strip=True) or anchor.get("title", "") or "Документ закупки"
-            signal = (href + " " + title).lower()
-            if not any(extension in signal for extension in extensions) and not re.search(
-                r"\b(документ|документац|извещен|тз|технич|договор|смет|чертеж|проект)\b", signal
-            ):
+            raw_title = anchor.get_text(" ", strip=True) or anchor.get("title", "")
+            signal = (href + " " + raw_title).lower()
+            document_path = re.search(
+                r"/(?:download|file|files|document|documents|attachment|attachments)(?:/|$|[?])",
+                parsed.path,
+                re.I,
+            )
+            same_zone = (parsed.hostname or "").endswith(base_zone) if base_zone else False
+            candidate = (
+                any(extension in signal for extension in extensions)
+                or bool(document_path)
+                or (id(anchor) in section_links and same_zone)
+                or (bool(raw_title) and markers.search(raw_title) and same_zone)
+            )
+            if not candidate or excluded.search(signal):
                 continue
             if href in seen:
                 continue
             seen.add(href)
             path = urlparse(href).path.lower()
             kind = next((extension[1:] for extension in extensions if path.endswith(extension)), "other")
-            found.append({"title": title[:1000], "url": href, "kind": kind, "access_status": "public_link"})
+            found.append(
+                {
+                    "title": (raw_title or "Документ закупки")[:1000],
+                    "url": href,
+                    "kind": kind,
+                    "access_status": "public_link",
+                }
+            )
         return found
+
+    def _rendered_document_links(self, source_url):
+        """Read links from a rendered public page; do not click file download links."""
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page()
+                try:
+                    page.goto(
+                        source_url,
+                        wait_until="domcontentloaded",
+                        timeout=self.settings.timeout_seconds * 1000,
+                    )
+                    page.locator("button, summary, [role=button]").evaluate_all(
+                        """elements => elements.filter(x => /документ|документац|файл/i.test(x.innerText || ''))
+                        .forEach(x => x.click())"""
+                    )
+                    page.wait_for_timeout(750)
+                    return self._document_links(page.content(), page.url)
+                finally:
+                    browser.close()
+        except Exception:
+            return []
 
     def close(self):
         self.session.close()

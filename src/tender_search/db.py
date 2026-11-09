@@ -195,6 +195,26 @@ class Store:
                         )
                     )
 
+    def replace_document_links(self, tender_id, documents):
+        """Refresh crawler output without touching the two audit entry links."""
+        with Session(self.engine) as session, session.begin():
+            session.query(TenderDocument).filter(
+                TenderDocument.tender_id == int(tender_id),
+                TenderDocument.kind.notin_(("tenderland_card", "source_entry")),
+            ).delete(synchronize_session=False)
+            for document in documents:
+                session.add(
+                    TenderDocument(
+                        tender_id=int(tender_id),
+                        kind=document["kind"],
+                        title=document["title"],
+                        url=document["url"],
+                        access_status=document["access_status"],
+                        document_metadata={},
+                        discovered_at=datetime.now(UTC),
+                    )
+                )
+
     def documents(self, tender_ids=None):
         with Session(self.engine) as session:
             statement = select(TenderDocument).order_by(TenderDocument.tender_id, TenderDocument.id)

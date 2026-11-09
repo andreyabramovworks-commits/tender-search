@@ -78,3 +78,34 @@ def test_document_collector_keeps_direct_attachments_only(monkeypatch):
         ("pdf", "https://example.org/docs/tz.pdf"),
         ("docx", "https://example.org/procedure/files/contract.docx"),
     ]
+
+
+def test_document_section_keeps_links_without_file_extension():
+    result = TenderLand._document_links(
+        """
+        <section class='procurement-documents'>
+          <a href='/download?id=1'>Лотовая документация</a>
+          <a href='/download?id=2'>PDF</a>
+        </section>
+        <a href='/news'>Новости</a>
+        """,
+        "https://example.org/procedure/123",
+    )
+    assert [x["url"] for x in result] == [
+        "https://example.org/download?id=1",
+        "https://example.org/download?id=2",
+    ]
+
+
+def test_document_collector_drops_site_navigation_and_privacy_files():
+    result = TenderLand._document_links(
+        """
+        <a href='https://social.invalid'>Документ закупки</a>
+        <a href='/documents/privacy-policy.pdf'>Политика конфиденциальности</a>
+        <a href='/files/notice.pdf'>Извещение о закупке</a>
+        """,
+        "https://example.org/procedure/123",
+    )
+    assert [(x["title"], x["url"]) for x in result] == [
+        ("Извещение о закупке", "https://example.org/files/notice.pdf")
+    ]
