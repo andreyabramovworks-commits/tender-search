@@ -126,6 +126,28 @@ class DriveArchive:
                 deleted += 1
         return deleted
 
+    def purge_exact_duplicates(self, folder_id):
+        """Move older exact-name duplicates to Drive trash, keeping newest."""
+        data = self.request(
+            "GET",
+            self.base + "/files",
+            params={
+                "q": f"'{folder_id}' in parents and trashed = false",
+                "fields": "files(id,name,createdTime)",
+                "pageSize": 1000,
+            },
+        )
+        groups = {}
+        for item in data.get("files", []):
+            groups.setdefault(item["name"], []).append(item)
+        removed = 0
+        for files in groups.values():
+            files.sort(key=lambda item: item.get("createdTime", ""), reverse=True)
+            for duplicate in files[1:]:
+                self.request("PATCH", self.base + "/files/" + duplicate["id"], json={"trashed": True})
+                removed += 1
+        return removed
+
     def download(self, url):
         """Download an attachment and resolve a public download landing page."""
         session = requests.Session()

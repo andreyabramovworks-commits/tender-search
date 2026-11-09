@@ -308,6 +308,8 @@ def main():
     sub.add_parser("inspect-document-sheet")
     cleanup = sub.add_parser("cleanup-tender-artifacts")
     cleanup.add_argument("--id", required=True, help="Tender ID whose prior Office XML artefacts will be moved to Drive trash")
+    duplicates = sub.add_parser("cleanup-drive-duplicates")
+    duplicates.add_argument("--folder-id", required=True, help="Google Drive tender folder whose exact-name duplicates will be moved to trash")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -360,6 +362,10 @@ def main():
     if args.command == "inspect-document-sheet":
         sheets = GoogleSheets(settings)
         print(json.dumps(sheets.values("'Документы'!A1:I5"), ensure_ascii=False))
+        return 0
+    if args.command == "cleanup-drive-duplicates":
+        removed = DriveArchive(settings).purge_exact_duplicates(args.folder_id)
+        print(json.dumps({"drive_duplicates_trashed": removed}, ensure_ascii=False))
         return 0
     store = Store(settings.database_url)
     try:
