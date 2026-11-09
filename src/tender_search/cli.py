@@ -34,19 +34,22 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
-def archive_documents(store, records, settings):
+def archive_documents(store, records, settings, limit=None):
     """Copy public attachments to Drive only after their link discovery succeeds."""
     if not settings.google_drive_folder_id:
         return {"archived": 0, "skipped": "GOOGLE_DRIVE_FOLDER_ID is missing"}
     by_id = {x["id"]: x for x in records}
     archive = DriveArchive(settings)
     archived = 0
+    candidates = []
     for document in store.documents(list(by_id)):
         likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
         if document["kind"] in {"tenderland_card", "source_entry"} or (
             document["archive_status"] == "archived" and not likely_zip
         ):
             continue
+        candidates.append(document)
+    for document in candidates[:limit] if limit else candidates:
         record = by_id[document["tender_id"]]
         try:
             results, is_zip = archive.archive(record, document)
@@ -65,7 +68,10 @@ def archive_documents(store, records, settings):
                 archived += 1
         except (DriveError, requests.RequestException, ValueError, zipfile.BadZipFile) as error:
             LOG.warning(
-                "Drive archive unavailable for tender %s: %s", document["tender_id"], type(error).__name__
+                "Drive archive unavailable for tender %s, %s: %s",
+                document["tender_id"],
+                document["title"][:80],
+                str(error)[:180],
             )
     return {"archived": archived}
 
@@ -273,6 +279,8 @@ def main():
     sub.add_parser("status")
     sub.add_parser("sync")
     sub.add_parser("sync-documents")
+    archive = sub.add_parser("archive-documents")
+    archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
     sub.add_parser("validate-keywords")
     probe = sub.add_parser("probe")
     probe.add_argument("--query", default="строит++лес")
@@ -356,6 +364,13 @@ def main():
             tender_ids = [record["id"] for record in store.records()]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+        elif args.command == "archive-documents":
+            if args.limit < 1:
+                parser.error("--limit must be positive")
+            records = store.records()
+            result = archive_documents(store, records, settings, limit=args.limit)
+            result.update(sheets.sync_documents(store.documents([record["id"] for record in records])))
+            print(json.dumps(result, ensure_ascii=False))
     finally:
         store.close()
     return 0
