@@ -17,6 +17,11 @@ class Settings:
     )
     spreadsheet_id: str = field(default_factory=lambda: os.getenv("GOOGLE_SPREADSHEET_ID", ""))
     google_drive_folder_id: str = field(default_factory=lambda: os.getenv("GOOGLE_DRIVE_FOLDER_ID", ""))
+    google_drive_oauth_token_file: Path = field(
+        default_factory=lambda: Path(
+            os.getenv("GOOGLE_DRIVE_OAUTH_TOKEN_FILE", ".secrets/google-drive-oauth.json")
+        )
+    )
     sheet_title: str = field(default_factory=lambda: os.getenv("GOOGLE_SHEET_TITLE", "Тендеры"))
     queries_file: Path = field(default_factory=lambda: Path(os.getenv("QUERIES_FILE", "config/queries.json")))
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "data")))

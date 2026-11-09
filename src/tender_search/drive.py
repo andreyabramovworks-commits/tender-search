@@ -12,6 +12,7 @@ from pathlib import PurePosixPath
 
 import requests
 from google.auth.transport.requests import AuthorizedSession
+from google.oauth2.credentials import Credentials as UserCredentials
 from google.oauth2.service_account import Credentials
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -44,9 +45,15 @@ class DriveArchive:
     def __init__(self, settings):
         if not settings.google_drive_folder_id:
             raise DriveError("GOOGLE_DRIVE_FOLDER_ID is missing")
-        credentials = Credentials.from_service_account_file(
-            str(settings.google_credentials_file), scopes=["https://www.googleapis.com/auth/drive"]
-        )
+        scopes = ["https://www.googleapis.com/auth/drive"]
+        if settings.google_drive_oauth_token_file.exists():
+            credentials = UserCredentials.from_authorized_user_file(
+                str(settings.google_drive_oauth_token_file), scopes=scopes
+            )
+        else:
+            credentials = Credentials.from_service_account_file(
+                str(settings.google_credentials_file), scopes=scopes
+            )
         self.settings = settings
         self.session = AuthorizedSession(credentials)
         self.base = "https://www.googleapis.com/drive/v3"
