@@ -66,6 +66,7 @@ class TenderLand:
             {"User-Agent": "Mozilla/5.0 tender-search/0.1", "X-Requested-With": "XMLHttpRequest"}
         )
         self.pages = {}
+        self.entities = {}
         self.available_fields = {}
         self.request_count = 0
 
@@ -294,7 +295,10 @@ class TenderLand:
                 if record["id"] in by_id:
                     yield record, raw
 
-    def enrich(self, record):
+    def entity(self, record):
+        """Return TenderLand's authenticated card model, including its Files list."""
+        if record["id"] in self.entities:
+            return self.entities[record["id"]]
         response = self.request("GET", "/Entity/Tender", params={"id": record["id"]})
         try:
             entity = json.JSONDecoder().raw_decode(response.text.split("let entityModel = ", 1)[1])[0]
@@ -302,6 +306,11 @@ class TenderLand:
             raise SourceError("TenderLand detail page changed or session expired") from error
         if str(entity.get("MainInfo", {}).get("Id")) != record["id"]:
             raise SourceError("TenderLand detail is unavailable or belongs to another tender")
+        self.entities[record["id"]] = entity
+        return entity
+
+    def enrich(self, record):
+        entity = self.entity(record)
         from .model import plain
 
         lots = entity.get("EntityLots", [])
@@ -318,8 +327,33 @@ class TenderLand:
         detail = {
             "MainInfo": {k: v for k, v in entity["MainInfo"].items() if "AI" not in k},
             "EntityLots": lots,
+            "Files": entity.get("Files", []),
         }
         return record, detail
+
+    def discover_tenderland_documents(self, record):
+        """Flatten files already indexed in the authenticated TenderLand card.
+
+        TenderLand exposes document names, types and direct SourceLink URLs even
+        where the original platform has a dynamic or login-protected UI.
+        """
+        documents, seen = [], set()
+        for group in self.entity(record).get("Files", []):
+            for item in group.get("Value", []):
+                url = (item.get("SourceLink") or "").strip()
+                if not url.startswith(("https://", "http://")) or url in seen:
+                    continue
+                seen.add(url)
+                extension = (item.get("Extension") or "").lower().lstrip(".") or "other"
+                documents.append(
+                    {
+                        "title": item.get("Name") or f"Документ TenderLand {item.get('Id', '')}",
+                        "url": url,
+                        "kind": extension,
+                        "access_status": "tenderland_indexed",
+                    }
+                )
+        return documents
 
     def discover_documents(self, record):
         """Find direct attachment links on a public procurement source page.

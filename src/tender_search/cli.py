@@ -82,7 +82,9 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
     discovered = 0
     for record in direct_records:
         try:
-            links = client.discover_documents(record)
+            tenderland_links = client.discover_tenderland_documents(record)
+            source_links = client.discover_documents(record)
+            links = client._merge_document_links(tenderland_links, source_links)
             # The entry pages are audit records, not attachments. Never let a
             # crawler rediscover one and collide with its unique database row.
             links = [
