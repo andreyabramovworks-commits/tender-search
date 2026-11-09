@@ -178,13 +178,10 @@ class DriveArchive:
         source_name = safe_name(document["title"])
         folder_id = self.tender_folder(record)
         digest = hashlib.sha256(content).hexdigest()
-        # Some tender platforms expose a ZIP through a generic download URL or
-        # name it "Скачать все файлы".  The bytes, not the label, are decisive.
-        is_zip = (
-            content[:4] == b"PK\x03\x04"
-            or document["kind"].lower() == "zip"
-            or source_name.lower().endswith(".zip")
-        )
+        # DOCX/XLSX/PPTX are ZIP-based internally, but must stay whole so
+        # Drive can convert them to native Google files.  Unpack only an
+        # attachment explicitly identified as a .zip archive.
+        is_zip = document["kind"].lower() == "zip" or source_name.lower().endswith(".zip")
         if not is_zip:
             return [
                 (
