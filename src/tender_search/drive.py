@@ -9,8 +9,10 @@ import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
+from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.credentials import Credentials as UserCredentials
 from google.oauth2.service_account import Credentials
@@ -97,8 +99,35 @@ class DriveArchive:
         return self.folder(month, safe_name(f"{record['id']} — {record['title']}"))
 
     def download(self, url):
-        response = requests.get(url, timeout=60, allow_redirects=True)
+        """Download an attachment and resolve a public download landing page."""
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (compatible; tender-search/1.0)",
+                "Accept": "text/html,application/pdf,application/octet-stream,*/*;q=0.8",
+            }
+        )
+        response = session.get(url, timeout=60, allow_redirects=True)
         response.raise_for_status()
+        if "text/html" in response.headers.get("Content-Type", "").lower():
+            page = BeautifulSoup(response.text, "html.parser")
+            candidates = []
+            refresh = page.find("meta", attrs={"http-equiv": lambda value: value and value.lower() == "refresh"})
+            if refresh and "url=" in refresh.get("content", "").lower():
+                candidates.append(refresh["content"].split("=", 1)[1].strip())
+            for node in page.select("a[href], iframe[src], embed[src], object[data]"):
+                candidate = node.get("href") or node.get("src") or node.get("data")
+                if candidate:
+                    candidates.append(candidate)
+            for candidate in candidates:
+                target = urljoin(response.url, candidate)
+                if target == response.url or target.startswith(("javascript:", "#")):
+                    continue
+                follow = session.get(target, timeout=60, allow_redirects=True, headers={"Referer": response.url})
+                follow.raise_for_status()
+                if "text/html" not in follow.headers.get("Content-Type", "").lower():
+                    response = follow
+                    break
         data = response.content
         if not data or len(data) > self.settings.archive_max_bytes:
             raise DriveError("Tender file is empty or exceeds ARCHIVE_MAX_BYTES")

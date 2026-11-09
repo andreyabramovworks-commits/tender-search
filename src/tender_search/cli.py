@@ -45,7 +45,7 @@ def archive_documents(store, records, settings, limit=None):
     for document in store.documents(list(by_id)):
         likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
         if document["kind"] in {"tenderland_card", "source_entry"} or (
-            document["archive_status"] == "archived" and not likely_zip
+            document["archive_status"] in {"archived", "download_failed"} and not likely_zip
         ):
             continue
         candidates.append(document)
@@ -67,6 +67,7 @@ def archive_documents(store, records, settings, limit=None):
                 )
                 archived += 1
         except (DriveError, requests.RequestException, ValueError, zipfile.BadZipFile) as error:
+            store.set_archive_result(document["tender_id"], document["url"], None, "download_failed")
             LOG.warning(
                 "Drive archive unavailable for tender %s, %s: %s",
                 document["tender_id"],
