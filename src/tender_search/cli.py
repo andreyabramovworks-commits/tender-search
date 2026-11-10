@@ -319,7 +319,17 @@ def run(settings, args):
             LOG.info("Run %s: %s", run_id, json.dumps(summary, ensure_ascii=False))
         finally:
             store.close()
-    return 0 if status in {"success", "collected"} else 2
+    # One archived TenderLand card can disappear between runs.  Its failed
+    # refresh is retained in the report as `partial`, but it must not turn a
+    # fully delivered search/sheet/document sync into a failed systemd job.
+    soft_partial = (
+        status == "partial"
+        and summary["synced"]
+        and not fatal
+        and not summary["jobs_failed"]
+        and not summary["details_failed"]
+    )
+    return 0 if status in {"success", "collected"} or soft_partial else 2
 
 
 def main():
