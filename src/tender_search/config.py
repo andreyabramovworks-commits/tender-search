@@ -16,6 +16,9 @@ class Settings:
         )
     )
     spreadsheet_id: str = field(default_factory=lambda: os.getenv("GOOGLE_SPREADSHEET_ID", ""))
+    manager_spreadsheet_id: str = field(
+        default_factory=lambda: os.getenv("GOOGLE_MANAGER_SPREADSHEET_ID", "")
+    )
     google_drive_folder_id: str = field(default_factory=lambda: os.getenv("GOOGLE_DRIVE_FOLDER_ID", ""))
     google_drive_oauth_token_file: Path = field(
         default_factory=lambda: Path(

@@ -349,6 +349,7 @@ def main():
     sub.add_parser("rebuild-documents")
     sub.add_parser("sync-queues")
     sub.add_parser("clean-ai-analysis")
+    sub.add_parser("sync-manager-ai")
     sub.add_parser("refresh-workflow")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
@@ -482,6 +483,9 @@ def main():
         elif args.command == "clean-ai-analysis":
             sheets = GoogleSheets(settings)
             print(json.dumps(sheets.clean_ai_analysis(), ensure_ascii=False))
+        elif args.command == "sync-manager-ai":
+            sheets = GoogleSheets(settings)
+            print(json.dumps(sheets.sync_manager_ai_analysis(), ensure_ascii=False))
         elif args.command == "refresh-workflow":
             # This is intentionally separate from `run`: no search queries are
             # sent to TenderLand, but all existing queues and document records

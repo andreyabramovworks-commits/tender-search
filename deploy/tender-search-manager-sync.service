@@ -1,0 +1,11 @@
+[Unit]
+Description=Append new AI analyses to the manager workbook
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tender-search/bin/manager-sync.sh
+TimeoutStartSec=15min
+UMask=0077

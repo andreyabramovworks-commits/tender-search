@@ -39,9 +39,10 @@ MANAGER_NAMES = [
 
 
 class GoogleSheets:
-    def __init__(self, settings, session=None):
+    def __init__(self, settings, session=None, spreadsheet_id=None):
         self.settings = settings
-        if not settings.spreadsheet_id:
+        self.spreadsheet_id = spreadsheet_id or settings.spreadsheet_id
+        if not self.spreadsheet_id:
             raise SheetsError("GOOGLE_SPREADSHEET_ID is missing")
         if session is None:
             credentials = Credentials.from_service_account_file(
@@ -49,7 +50,7 @@ class GoogleSheets:
             )
             session = AuthorizedSession(credentials)
         self.session = session
-        self.base = "https://sheets.googleapis.com/v4/spreadsheets/" + settings.spreadsheet_id
+        self.base = "https://sheets.googleapis.com/v4/spreadsheets/" + self.spreadsheet_id
 
     def request(self, path="", method="GET", data=None, retry=True):
         for attempt in range(5 if retry else 1):
@@ -75,6 +76,119 @@ class GoogleSheets:
 
     def values(self, a1):
         return self.request("/values/" + quote(a1, safe="")).get("values", [])
+
+    def sync_manager_ai_analysis(self):
+        """Append new AI results to the manager workbook without touching its work.
+
+        The manager workbook is intentionally append-only.  A TenderLand ID is
+        its stable key: human checkboxes, assignees, notes, colours and row order
+        are never overwritten or sorted by the automation.
+        """
+        target_id = self.settings.manager_spreadsheet_id
+        if not target_id:
+            return {"enabled": False, "appended": 0, "existing": 0}
+        source_rows = self.values("'AI-анализ'!A1:O1000")
+        if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Source AI analysis headers differ; refusing manager sync")
+        target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
+        target._ensure_manager_ai_layout()
+        target_rows = target.values("'AI-анализ'!A1:O1000")
+        if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Manager AI analysis headers differ; refusing manager sync")
+        existing_ids = {
+            str(row[0]).strip() for row in target_rows[1:] if row and str(row[0]).strip()
+        }
+        additions = []
+        for source in source_rows[1:]:
+            if not source or not str(source[0]).strip() or str(source[0]).strip() in existing_ids:
+                continue
+            row = list(source[: len(AI_ANALYSIS_HEADERS)])
+            row += [""] * (len(AI_ANALYSIS_HEADERS) - len(row))
+            tender_id = str(row[0]).strip()
+            url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
+            row[1] = f'=HYPERLINK("{url}";"{url}")'
+            row[3] = False  # manager decision checkbox
+            row[4] = ""  # manager assignment is human-only
+            additions.append(row)
+        if additions:
+            start = len(target_rows) + 1
+            end = start + len(additions) - 1
+            target.request(
+                "/values:batchUpdate",
+                "POST",
+                {
+                    "valueInputOption": "USER_ENTERED",
+                    "data": [{"range": f"'AI-анализ'!A{start}:O{end}", "values": additions}],
+                },
+            )
+        return {"enabled": True, "appended": len(additions), "existing": len(existing_ids)}
+
+    def _ensure_manager_ai_layout(self):
+        """Normalise the manager copy once, without changing any tender rows."""
+        sheet = self.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            raise SheetsError("Manager workbook has no AI-анализ sheet")
+        header = (self.values("'AI-анализ'!A1:O1") or [[]])[0]
+        legacy = [item for item in AI_ANALYSIS_HEADERS if item != "Менеджер"]
+        if header == legacy:
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "insertDimension": {
+                                "range": {
+                                    "sheetId": sheet["sheetId"], "dimension": "COLUMNS",
+                                    "startIndex": 4, "endIndex": 5,
+                                },
+                                "inheritFromBefore": True,
+                            }
+                        },
+                        {
+                            "updateCells": {
+                                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 4, "endColumnIndex": 5},
+                                "rows": [{"values": [{"userEnteredValue": {"stringValue": "Менеджер"}}]}],
+                                "fields": "userEnteredValue",
+                            }
+                        },
+                        {
+                            "repeatCell": {
+                                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 4, "endColumnIndex": 5},
+                                "cell": {}, "fields": "userEnteredValue",
+                            }
+                        },
+                    ]
+                },
+            )
+        elif header != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Manager AI analysis headers differ; refusing to overwrite")
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {"sheetId": sheet["sheetId"], "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 5}},
+                            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                        }
+                    },
+                    {
+                        "setDataValidation": {
+                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 3, "endColumnIndex": 4},
+                            "rule": {"condition": {"type": "BOOLEAN"}, "strict": True, "showCustomUi": True},
+                        }
+                    },
+                    {
+                        "setDataValidation": {
+                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 4, "endColumnIndex": 5},
+                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in MANAGER_NAMES]}, "strict": True, "showCustomUi": True},
+                        }
+                    },
+                ]
+            },
+        )
 
     def target_sheet(self, title=None, create=False):
         title = title or self.settings.sheet_title

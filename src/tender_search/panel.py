@@ -13,6 +13,7 @@ JOBS = {
     "sync-documents": ("Обновить вкладку Документы", ["sync-documents"]),
     "rebuild-documents": ("Пересобрать Документы по Тендерам", ["rebuild-documents"]),
     "clean-ai-analysis": ("Очистить AI-анализ", ["clean-ai-analysis"]),
+    "sync-manager-ai": ("Обновить таблицу менеджеров", ["sync-manager-ai"]),
     "refresh-workflow": ("Обновить реестры без поиска", ["refresh-workflow"]),
     "run": ("Полный ежедневный поиск", ["run"]),
 }
@@ -55,6 +56,7 @@ PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><title>Tender Search 
 <div class=card><h3>Обновить «Документы»</h3><p>Опубликовать текущие ссылки и статусы в Google Таблице.</p><button data-job=sync-documents>Запустить</button></div>
 <div class=card><h3>Пересобрать «Документы»</h3><p>Оставить только тендеры из вкладки «Тендеры», убрать лишние строки и добавить недостающие.</p><button data-job=rebuild-documents>Запустить</button></div>
 <div class=card><h3>Очистить «AI-анализ»</h3><p>Удалить только те строки AI-анализа, для которых тендера больше нет во вкладке «Документы». Вся строка удаляется целиком: флажок и комментарий не останутся у другого тендера.</p><button data-job=clean-ai-analysis>Запустить</button></div>
+<div class=card><h3>Обновить таблицу менеджеров</h3><p>Добавить в рабочую копию только новые AI-анализы. Старые строки, флажки, менеджеры, комментарии и цвета не меняются.</p><button data-job=sync-manager-ai>Запустить</button></div>
 <div class=card><h3>Обновить всё без нового поиска</h3><p>Применить фильтры, обновить очереди и документы, загрузить доступные файлы в Drive и очистить AI-анализ. Тексты AI не создаются: их пишет отдельный ежедневный чат.</p><button data-job=refresh-workflow>Запустить</button></div>
 <div class=card><h3>Полный ежедневный поиск</h3><p>Искать TenderLand по ключевикам, фильтровать и синхронизировать очереди.</p><button data-job=run>Запустить</button></div></div>
 <div class=status><b id=label>Загрузка…</b><p id=percent>0%</p><div class=bar><div id=fill class=fill></div></div><pre id=out></pre></div></div>
