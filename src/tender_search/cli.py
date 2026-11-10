@@ -146,7 +146,7 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
         except Exception as error:  # One unavailable procurement site must not stop the daily run.
             LOG.warning("Document registry unavailable for tender %s: %s", record["id"], str(error)[:180])
     result = archive_documents(store, direct_records, client.settings)
-    result.update(sheets.sync_documents(store.documents(direct_ids)))
+    result.update(sheets.sync_documents(store.documents(direct_ids), direct_records))
     result["scanned_tenders"] = len(direct_records)
     result["new_links_seen"] = discovered
     return result
@@ -459,10 +459,9 @@ def main():
             sheets = GoogleSheets(settings)
             # The registry is the document queue for direct work only, never
             # the full historical database of target/partner/non-target rows.
-            tender_ids = [
-                record["id"] for record in store.records() if classify(record).bucket == DIRECT
-            ]
-            print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
+            direct_records = [record for record in store.records() if classify(record).bucket == DIRECT]
+            tender_ids = [record["id"] for record in direct_records]
+            print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
         elif args.command == "rebuild-documents":
             sheets = GoogleSheets(settings)
@@ -475,10 +474,12 @@ def main():
                     ],
                 }
             )
-            tender_ids = [
-                record["id"] for record in store.records() if classify(record, reference["rules"]).bucket == DIRECT
+            direct_records = [
+                record for record in store.records()
+                if classify(record, reference["rules"]).bucket == DIRECT
             ]
-            print(json.dumps(sheets.sync_documents(store.documents(tender_ids)), ensure_ascii=False))
+            tender_ids = [record["id"] for record in direct_records]
+            print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
         elif args.command == "clean-ai-analysis":
             sheets = GoogleSheets(settings)
@@ -517,14 +518,14 @@ def main():
                         LOG.warning("TenderLand files unavailable for tender %s: %s", record["id"], error)
             finally:
                 client.close()
-            print(json.dumps(sheets.sync_documents(store.documents([record["id"] for record in records])), ensure_ascii=False))
+            print(json.dumps(sheets.sync_documents(store.documents([record["id"] for record in records]), records), ensure_ascii=False))
         elif args.command == "archive-documents":
             if args.limit < 1:
                 parser.error("--limit must be positive")
             sheets = GoogleSheets(settings)
             records = [record for record in store.records() if classify(record).bucket == DIRECT]
             result = archive_documents(store, records, settings, limit=args.limit)
-            result.update(sheets.sync_documents(store.documents([record["id"] for record in records])))
+            result.update(sheets.sync_documents(store.documents([record["id"] for record in records]), records))
             print(json.dumps(result, ensure_ascii=False))
         elif args.command == "cleanup-tender-artifacts":
             record = next((x for x in store.records() if str(x["id"]) == str(args.id)), None)
@@ -534,7 +535,8 @@ def main():
             removed_db = store.delete_extracted_artifacts(record["id"])
             sheets = GoogleSheets(settings)
             direct_ids = [x["id"] for x in store.records() if classify(x).bucket == DIRECT]
-            sheets.sync_documents(store.documents(direct_ids))
+            direct_records = [x for x in store.records() if classify(x).bucket == DIRECT]
+            sheets.sync_documents(store.documents(direct_ids), direct_records)
             print(json.dumps({"drive_trashed": removed_drive, "registry_removed": removed_db}, ensure_ascii=False))
     finally:
         store.close()

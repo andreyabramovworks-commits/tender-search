@@ -410,7 +410,7 @@ class GoogleSheets:
         self.format_sheet(sheet["sheetId"])
         self.format_data(sheet["sheetId"], len(rows))
 
-    def sync_documents(self, documents):
+    def sync_documents(self, documents, tenders=()):
         title, headers = (
             "Документы",
             [
@@ -469,7 +469,10 @@ class GoogleSheets:
             if document.get("sha256"):
                 seen_content.add(fingerprint)
             attachments.append(document)
-        grouped = {}
+        grouped = {
+            tender["id"]: {"title": tender.get("title", ""), "documents": []}
+            for tender in tenders
+        }
         # Keep the registry aligned one-to-one with the target-tender queue.
         # A tender can temporarily have no public attachment: it must still be
         # visible as an empty row instead of silently disappearing from the
