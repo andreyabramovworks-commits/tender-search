@@ -45,6 +45,12 @@ def archive_documents(store, records, settings, limit=None):
     for document in store.documents(list(by_id)):
         likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
         tenderland_file = "/File/Get?storageId=" in document["url"]
+        # TenderLand uses -1 as a placeholder when the attachment is no
+        # longer available. Retrying it costs a network timeout and cannot
+        # produce a Drive file, so leave it visible in the registry but do
+        # not let it delay the whole daily run.
+        if "storageId=-1" in document["url"]:
+            continue
         if document["kind"] in {"tenderland_card", "source_entry"} or (
             document["archive_status"] == "archived" and not likely_zip
         ) or (

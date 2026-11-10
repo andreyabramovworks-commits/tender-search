@@ -29,11 +29,18 @@ def launch(job):
 
     def worker():
         process = subprocess.run(["tender-search", *command], text=True, capture_output=True)
+        output = (process.stdout + "\n" + process.stderr)[-6000:]
         with LOCK:
-            STATE["output"] = (process.stdout + "\n" + process.stderr)[-6000:]
-            STATE["status"] = "success" if process.returncode == 0 else "failed"
-            STATE["progress"] = 100 if process.returncode == 0 else 0
-            STATE["label"] = ("Готово: " if process.returncode == 0 else "Ошибка: ") + label
+            if "Another tender-search process is running" in output:
+                STATE["output"] = "Сейчас уже выполняется утренний поиск или другая операция. Дождитесь её завершения и нажмите кнопку ещё раз."
+                STATE["status"] = "busy"
+                STATE["progress"] = 0
+                STATE["label"] = "Ожидание: другая операция уже выполняется"
+            else:
+                STATE["output"] = output
+                STATE["status"] = "success" if process.returncode == 0 else "failed"
+                STATE["progress"] = 100 if process.returncode == 0 else 0
+                STATE["label"] = ("Готово: " if process.returncode == 0 else "Ошибка: ") + label
 
     threading.Thread(target=worker, daemon=True).start()
     return True, "Запущено"
