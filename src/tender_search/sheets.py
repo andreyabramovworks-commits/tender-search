@@ -17,6 +17,7 @@ AI_ANALYSIS_HEADERS = [
     "Ссылка TenderLand",
     "Решение AI",
     "Решение менеджера",
+    "Менеджер",
     "Комментарий",
     "Объект закупки",
     "Наши работы",
@@ -27,6 +28,13 @@ AI_ANALYSIS_HEADERS = [
     "Доказательства и ссылки",
     "Нужен ручной доступ",
     "Актуально на МСК",
+]
+
+MANAGER_NAMES = [
+    "Ораева Алина",
+    "Сметанин Олег",
+    "Колесникова Анастасия",
+    "Колесников Данил",
 ]
 
 
@@ -505,14 +513,14 @@ class GoogleSheets:
         headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
-        existing = self.values(prefix + "!A1:N2")
+        existing = self.values(prefix + "!A1:O2")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("AI analysis headers differ; refusing to overwrite")
         if not existing or not any(existing[0]):
             self.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:N1", "values": [headers]}]},
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:O1", "values": [headers]}]},
             )
             self.request(
                 ":batchUpdate",
@@ -544,6 +552,25 @@ class GoogleSheets:
                                 },
                             }
                         },
+                        {
+                            "setDataValidation": {
+                                "range": {
+                                    "sheetId": sheet["sheetId"],
+                                    "startRowIndex": 1,
+                                    "endRowIndex": 1000,
+                                    "startColumnIndex": 4,
+                                    "endColumnIndex": 5,
+                                },
+                                "rule": {
+                                    "condition": {
+                                        "type": "ONE_OF_LIST",
+                                        "values": [{"userEnteredValue": name} for name in MANAGER_NAMES],
+                                    },
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                },
+                            }
+                        },
                     ]
                 },
             )
@@ -562,7 +589,7 @@ class GoogleSheets:
             for row in self.values("'Документы'!A2:A1000")
             if row and str(row[0]).strip()
         }
-        rows = self.values("'AI-анализ'!A1:N1000")
+        rows = self.values("'AI-анализ'!A1:O1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
         ai_id_rows = [
