@@ -72,7 +72,9 @@ def test_unavailable_old_tender_does_not_block_new_google_rows(monkeypatch, tmp_
         database_url="fake", data_dir=tmp_path, jobs=lambda: iter([job]), search_modes=["Pro"]
     )
     result = run(settings, SimpleNamespace(collect_only=False, limit_jobs=None))
-    assert result == 2
+    # A single disappeared historical TenderLand card is reported as partial,
+    # but must not fail the systemd job when all current data was delivered.
+    assert result == 0
     assert summary["status"] == "partial" and summary["synced"]
     assert summary["not_refreshed"] == 1
     assert {x["id"] for x in delivered} == {"123", "456"}
