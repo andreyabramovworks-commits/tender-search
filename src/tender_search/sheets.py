@@ -531,7 +531,7 @@ class GoogleSheets:
                             "updateSheetProperties": {
                                 "properties": {
                                     "sheetId": sheet["sheetId"],
-                                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 4},
+                                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 5},
                                 },
                                 "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
                             }
