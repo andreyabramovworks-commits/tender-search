@@ -17,11 +17,11 @@ AI_ANALYSIS_HEADERS = [
     "Объект закупки",
     "Окончание подачи заявок",
     "Цена",
-    "Решение AI",
     "Ссылка TenderLand",
     "Ссылка на первоисточник",
     "Решение менеджера",
     "Менеджер",
+    "Решение AI",
     "Комментарий",
     "Комментарий руководителя",
     "Место исполнения",
@@ -113,7 +113,7 @@ class GoogleSheets:
             row_number
             for row_number, row in enumerate(target_rows[1:], start=2)
             if row and str(row[0]).strip()
-            and (len(row) <= 4 or str(row[4]).strip() not in MANAGER_VISIBLE_AI_DECISIONS)
+            and (len(row) <= 8 or str(row[8]).strip() not in MANAGER_VISIBLE_AI_DECISIONS)
         ]
         for row_number in reversed(hidden_rows):
             target.request(
@@ -130,8 +130,8 @@ class GoogleSheets:
         # tenders worth a human decision, never AI-confirmed non-targets.
         allowed_source = [
             row for row in source_rows[1:]
-            if row and len(row) > 4 and str(row[0]).strip()
-            and str(row[4]).strip() in MANAGER_VISIBLE_AI_DECISIONS
+            if row and len(row) > 8 and str(row[0]).strip()
+            and str(row[8]).strip() in MANAGER_VISIBLE_AI_DECISIONS
         ]
         existing_ids = {
             str(row[0]).strip() for row in target_rows[1:] if row and str(row[0]).strip()
@@ -144,12 +144,12 @@ class GoogleSheets:
             row += [""] * (len(AI_ANALYSIS_HEADERS) - len(row))
             tender_id = str(row[0]).strip()
             url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
-            row[5] = f'=HYPERLINK("{url}";"{url}")'
-            row[7] = ""  # manager decision is deliberately blank on arrival
-            row[8] = ""  # manager assignment is human-only
+            row[4] = f'=HYPERLINK("{url}";"{url}")'
+            row[6] = ""  # manager decision is deliberately blank on arrival
+            row[7] = ""  # manager assignment is human-only
             additions.append(row)
-        # B:D, F:G and L:M belong to the source registry. The manager and the
-        # leader are free to edit H:K, therefore each sync refreshes only
+        # B:F and L:M belong to the source registry. The manager and the
+        # leader are free to edit G:J, therefore each sync refreshes only
         # immutable procurement facts without disturbing their decisions,
         # assignees, comments or row order.
         source_metadata = {
@@ -157,8 +157,8 @@ class GoogleSheets:
                 row[1] if len(row) > 1 else "",
                 row[2] if len(row) > 2 else "",
                 row[3] if len(row) > 3 else "",
+                row[4] if len(row) > 4 else "",
                 row[5] if len(row) > 5 else "",
-                row[6] if len(row) > 6 else "",
                 row[11] if len(row) > 11 else "",
                 row[12] if len(row) > 12 else "",
             )
@@ -178,7 +178,7 @@ class GoogleSheets:
                         "values": [[object_name, end_at, price]],
                     },
                     {
-                        "range": f"'AI-анализ'!F{row_number}:G{row_number}",
+                        "range": f"'AI-анализ'!E{row_number}:F{row_number}",
                         "values": [[
                             f'=HYPERLINK("{tenderland_url}";"{tenderland_url}")' if tenderland_url else "",
                             f'=HYPERLINK("{source_url}";"{source_url}")' if source_url else "",
@@ -285,7 +285,7 @@ class GoogleSheets:
                     },
                     {
                         "setDataValidation": {
-                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 7, "endColumnIndex": 8},
+                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 6, "endColumnIndex": 7},
                             "rule": {
                                 "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": item} for item in MANAGER_DECISIONS]},
                                 "strict": True,
@@ -295,7 +295,7 @@ class GoogleSheets:
                     },
                     {
                         "setDataValidation": {
-                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 8, "endColumnIndex": 9},
+                            "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 7, "endColumnIndex": 8},
                             "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in MANAGER_NAMES]}, "strict": True, "showCustomUi": True},
                         }
                     },
@@ -790,8 +790,8 @@ class GoogleSheets:
                                     "sheetId": sheet["sheetId"],
                                     "startRowIndex": 1,
                                     "endRowIndex": 1000,
-                                    "startColumnIndex": 7,
-                                    "endColumnIndex": 8,
+                                    "startColumnIndex": 6,
+                                    "endColumnIndex": 7,
                                 },
                                 "rule": {
                                     "condition": {
@@ -809,8 +809,8 @@ class GoogleSheets:
                                     "sheetId": sheet["sheetId"],
                                     "startRowIndex": 1,
                                     "endRowIndex": 1000,
-                                    "startColumnIndex": 8,
-                                    "endColumnIndex": 9,
+                                    "startColumnIndex": 7,
+                                    "endColumnIndex": 8,
                                 },
                                 "rule": {
                                     "condition": {
