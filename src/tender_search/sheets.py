@@ -32,6 +32,7 @@ AI_ANALYSIS_HEADERS = [
     "Недостающие документы",
     "Вопросы заказчику",
     "Доказательства и ссылки",
+    "Категории",
     "Нужен ручной доступ",
 ]
 
@@ -98,13 +99,13 @@ class GoogleSheets:
         target_id = self.settings.manager_spreadsheet_id
         if not target_id:
             return {"enabled": False, "appended": 0, "existing": 0}
-        source_rows = self.values("'AI-анализ'!A1:T1000")
+        source_rows = self.values("'AI-анализ'!A1:U1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
         target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
         target._ensure_manager_ai_layout()
         target.ensure_crm_status_column()
-        target_rows = target.values("'AI-анализ'!A1:T1000")
+        target_rows = target.values("'AI-анализ'!A1:U1000")
         if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Manager AI analysis headers differ; refusing manager sync")
         # Removing a row as a whole keeps each remaining manager choice and
@@ -128,7 +129,7 @@ class GoogleSheets:
                 }}}]},
             )
         if hidden_rows:
-            target_rows = target.values("'AI-анализ'!A1:T1000")
+            target_rows = target.values("'AI-анализ'!A1:U1000")
         # The manager workbook is deliberately narrower: it contains only
         # tenders worth a human decision, never AI-confirmed non-targets.
         allowed_source = [
@@ -148,11 +149,11 @@ class GoogleSheets:
             tender_id = str(row[0]).strip()
             url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
             row[4] = f'=HYPERLINK("{url}";"{url}")'
-            row[6] = ""  # manager decision is deliberately blank on arrival
-            row[7] = ""  # manager assignment is human-only
+            row[7] = ""  # manager decision is deliberately blank on arrival
+            row[8] = ""  # manager assignment is human-only
             additions.append(row)
-        # B:F and L:M belong to the source registry. The manager and the
-        # leader are free to edit G:J, therefore each sync refreshes only
+        # B:G and M:N belong to the source registry. The manager and the
+        # leader are free to edit H:L, therefore each sync refreshes only
         # immutable procurement facts without disturbing their decisions,
         # assignees, comments or row order.
         source_metadata = {
@@ -164,6 +165,7 @@ class GoogleSheets:
                 row[5] if len(row) > 5 else "",
                 row[11] if len(row) > 11 else "",
                 row[12] if len(row) > 12 else "",
+                row[19] if len(row) > 19 else "",
             )
             for row in source_rows[1:]
             if row and len(row) > 6 and str(row[0]).strip()
@@ -174,7 +176,7 @@ class GoogleSheets:
                 continue
             metadata = source_metadata.get(str(target_row[0]).strip())
             if metadata:
-                object_name, end_at, price, tenderland_url, source_url, place, execution_term = metadata
+                object_name, end_at, price, tenderland_url, source_url, place, execution_term, category = metadata
                 source_metadata_updates.extend([
                     {
                         "range": f"'AI-анализ'!B{row_number}:D{row_number}",
@@ -191,6 +193,7 @@ class GoogleSheets:
                         "range": f"'AI-анализ'!L{row_number}:M{row_number}",
                         "values": [[place, execution_term]],
                     },
+                    {"range": f"'AI-анализ'!T{row_number}", "values": [[category]]},
                 ])
         if source_metadata_updates:
             target.request(
@@ -238,7 +241,7 @@ class GoogleSheets:
                 "POST",
                 {
                     "valueInputOption": "USER_ENTERED",
-                    "data": [{"range": f"'AI-анализ'!A{start}:T{end}", "values": additions}],
+                    "data": [{"range": f"'AI-анализ'!A{start}:U{end}", "values": additions}],
                 },
             )
         return {"enabled": True, "appended": len(additions), "existing": len(existing_ids)}
@@ -248,7 +251,7 @@ class GoogleSheets:
         sheet = self.target_sheet("AI-анализ", create=False)
         if not sheet:
             raise SheetsError("Manager workbook has no AI-анализ sheet")
-        header = (self.values("'AI-анализ'!A1:T1") or [[]])[0]
+        header = (self.values("'AI-анализ'!A1:U1") or [[]])[0]
         legacy = [item for item in AI_ANALYSIS_HEADERS if item != "Менеджер"]
         if header == legacy:
             self.request(
@@ -315,21 +318,21 @@ class GoogleSheets:
         )
 
     def ensure_crm_status_column(self):
-        """Reserve U for the CRM result without modifying manager decisions."""
+        """Reserve V for the CRM result without modifying manager decisions."""
         sheet = self.target_sheet("AI-анализ", create=False)
         if not sheet:
             raise SheetsError("Manager workbook has no AI-анализ sheet")
-        current = self.values("'AI-анализ'!U1:U1")
+        current = self.values("'AI-анализ'!V1:V1")
         if current and current[0] and current[0][0] not in ("", CRM_STATUS_HEADER):
-            raise SheetsError("Column U is already in use")
-        if sheet["gridProperties"]["columnCount"] < 21:
+            raise SheetsError("Column V is already in use")
+        if sheet["gridProperties"]["columnCount"] < 22:
             self.request(":batchUpdate", "POST", {"requests": [{"updateSheetProperties": {
-                "properties": {"sheetId": sheet["sheetId"], "gridProperties": {"columnCount": 21}},
+                                "properties": {"sheetId": sheet["sheetId"], "gridProperties": {"columnCount": 22}},
                 "fields": "gridProperties.columnCount",
             }}]})
         if not current or not current[0] or not current[0][0]:
-            self.request("/values/" + quote("'AI-анализ'!U1", safe="") + "?valueInputOption=RAW", "PUT", {
-                "range": "'AI-анализ'!U1", "majorDimension": "ROWS", "values": [[CRM_STATUS_HEADER]]
+            self.request("/values/" + quote("'AI-анализ'!V1", safe="") + "?valueInputOption=RAW", "PUT", {
+                "range": "'AI-анализ'!V1", "majorDimension": "ROWS", "values": [[CRM_STATUS_HEADER]]
             })
 
     def target_sheet(self, title=None, create=False):
@@ -772,14 +775,14 @@ class GoogleSheets:
         headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
-        existing = self.values(prefix + "!A1:T2")
+        existing = self.values(prefix + "!A1:U2")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("AI analysis headers differ; refusing to overwrite")
         if not existing or not any(existing[0]):
             self.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:T1", "values": [headers]}]},
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:U1", "values": [headers]}]},
             )
             self.request(
                 ":batchUpdate",
@@ -839,7 +842,7 @@ class GoogleSheets:
         return {"headers": len(headers)}
 
     def clean_ai_analysis(self):
-        """Keep AI-analysis as a compact queue of every tender in Documents.
+        """Keep AI-analysis as a compact queue of every tender in Тендеры.
 
         Existing rows are moved only by deleting entire rows, so human choices,
         comments and row colouring remain attached to their TenderLand ID.
@@ -848,13 +851,13 @@ class GoogleSheets:
         """
         ai_sheet = self.target_sheet("AI-анализ", create=True)
         self.ensure_ai_analysis()
-        document_ids = list(dict.fromkeys(
+        tender_ids = list(dict.fromkeys(
             str(row[0]).strip()
-            for row in self.values("'Документы'!A2:A1000")
+            for row in self.values("'Тендеры'!A2:A1000")
             if row and str(row[0]).strip()
         ))
-        document_id_set = set(document_ids)
-        rows = self.values("'AI-анализ'!A1:T1000")
+        tender_id_set = set(tender_ids)
+        rows = self.values("'AI-анализ'!A1:U1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
         kept_ids, removal_rows = set(), []
@@ -865,7 +868,7 @@ class GoogleSheets:
                     removal_rows.append(row_index)
                     continue
                 raise SheetsError(f"AI row {row_index} has data but no TenderLand ID")
-            if tender_id not in document_id_set or tender_id in kept_ids:
+            if tender_id not in tender_id_set or tender_id in kept_ids:
                 removal_rows.append(row_index)
                 continue
             kept_ids.add(tender_id)
@@ -888,7 +891,7 @@ class GoogleSheets:
                     ]
                 },
             )
-        missing_ids = [tender_id for tender_id in document_ids if tender_id not in kept_ids]
+        missing_ids = [tender_id for tender_id in tender_ids if tender_id not in kept_ids]
         if missing_ids:
             start_row = len(kept_ids) + 2
             self.request(
@@ -924,7 +927,44 @@ class GoogleSheets:
                 ]
             },
         )
+        self._refresh_ai_registry_fields()
         return {"removed": len(removal_rows), "added": len(missing_ids), "kept": len(kept_ids) + len(missing_ids)}
+
+    def _refresh_ai_registry_fields(self):
+        """Fill the non-AI part of the queue directly from the source tabs.
+
+        These columns are intentionally formulas rather than copied values: a
+        later daily TenderLand refresh updates title, dates, price, links and
+        location without touching a manager's decision or any AI conclusion.
+        Column S is reserved for the complete Google Drive document set from
+        ``Документы!F``; the analyst must not overwrite it with prose.
+        """
+        prefix = "'AI-анализ'"
+        for cell_range in ("B2:F1000", "L2:M1000", "S2:T1000"):
+            self.request("/values/" + quote(prefix + "!" + cell_range, safe="") + ":clear", "POST", {})
+        formulas = [
+            [
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:B;2;FALSE);"")))',
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:S;19;FALSE);"")))',
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:N;14;FALSE);"")))',
+                '=ARRAYFORMULA(IF(A2:A="";"";HYPERLINK("https://tenderland.ru/Entity/Tender?id="&A2:A;"https://tenderland.ru/Entity/Tender?id="&A2:A)))',
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(HYPERLINK(VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE);VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE));"")))',
+            ],
+        ]
+        self.request(
+            "/values:batchUpdate", "POST",
+            {"valueInputOption": "USER_ENTERED", "data": [
+                {"range": prefix + "!B2:F2", "values": formulas},
+                {"range": prefix + "!L2:M2", "values": [[
+                    '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:P;16;FALSE);"")))',
+                    '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:T;20;FALSE);"")))',
+                ]]},
+                {"range": prefix + "!S2:T2", "values": [[
+                    '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Документы\'!A:F;6;FALSE);"")))',
+                    '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:G;7;FALSE);"")))',
+                ]]},
+            ]},
+        )
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
