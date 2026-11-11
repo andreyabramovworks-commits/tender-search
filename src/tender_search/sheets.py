@@ -21,6 +21,9 @@ AI_ANALYSIS_HEADERS = [
     "Менеджер",
     "Комментарий",
     "Объект закупки",
+    "Начало подачи заявок",
+    "Окончание подачи заявок",
+    "Срок исполнения",
     "Наши работы",
     "Цена и сроки",
     "Риски",
@@ -28,8 +31,12 @@ AI_ANALYSIS_HEADERS = [
     "Вопросы заказчику",
     "Доказательства и ссылки",
     "Нужен ручной доступ",
-    "Актуально на МСК",
 ]
+
+MANAGER_ACCEPTED = "Подходит"
+MANAGER_REJECTED = "Не подходит"
+MANAGER_DECISIONS = [MANAGER_ACCEPTED, MANAGER_REJECTED]
+MANAGER_VISIBLE_AI_DECISIONS = {"интересен, нужны уточнения", "нужна ручная проверка"}
 
 MANAGER_NAMES = [
     "Ораева Алина",
@@ -88,19 +95,45 @@ class GoogleSheets:
         target_id = self.settings.manager_spreadsheet_id
         if not target_id:
             return {"enabled": False, "appended": 0, "existing": 0}
-        source_rows = self.values("'AI-анализ'!A1:P1000")
+        source_rows = self.values("'AI-анализ'!A1:R1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
         target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
         target._ensure_manager_ai_layout()
-        target_rows = target.values("'AI-анализ'!A1:P1000")
+        target_rows = target.values("'AI-анализ'!A1:R1000")
         if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Manager AI analysis headers differ; refusing manager sync")
+        # Removing a row as a whole keeps each remaining manager choice and
+        # manually applied formatting attached to its own TenderLand ID.
+        hidden_rows = [
+            row_number
+            for row_number, row in enumerate(target_rows[1:], start=2)
+            if row and str(row[0]).strip()
+            and (len(row) <= 3 or str(row[3]).strip() not in MANAGER_VISIBLE_AI_DECISIONS)
+        ]
+        for row_number in reversed(hidden_rows):
+            target.request(
+                ":batchUpdate",
+                "POST",
+                {"requests": [{"deleteDimension": {"range": {
+                    "sheetId": target.target_sheet("AI-анализ")["sheetId"],
+                    "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number,
+                }}}]},
+            )
+        if hidden_rows:
+            target_rows = target.values("'AI-анализ'!A1:R1000")
+        # The manager workbook is deliberately narrower: it contains only
+        # tenders worth a human decision, never AI-confirmed non-targets.
+        allowed_source = [
+            row for row in source_rows[1:]
+            if row and len(row) > 3 and str(row[0]).strip()
+            and str(row[3]).strip() in MANAGER_VISIBLE_AI_DECISIONS
+        ]
         existing_ids = {
             str(row[0]).strip() for row in target_rows[1:] if row and str(row[0]).strip()
         }
         additions = []
-        for source in source_rows[1:]:
+        for source in allowed_source:
             if not source or not str(source[0]).strip() or str(source[0]).strip() in existing_ids:
                 continue
             row = list(source[: len(AI_ANALYSIS_HEADERS)])
@@ -108,29 +141,45 @@ class GoogleSheets:
             tender_id = str(row[0]).strip()
             url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
             row[1] = f'=HYPERLINK("{url}";"{url}")'
-            row[4] = False  # manager decision checkbox
+            row[4] = ""  # manager decision is deliberately blank on arrival
             row[5] = ""  # manager assignment is human-only
             additions.append(row)
-        source_urls = {
-            str(row[0]).strip(): str(row[2]).strip()
+        # C and I:K belong to the source registry.  The manager is free to
+        # edit only E:F, therefore each sync refreshes the immutable link and
+        # tender dates without disturbing human decisions, assignees, notes or
+        # row order.
+        source_metadata = {
+            str(row[0]).strip(): (
+                str(row[2]).strip(),
+                row[8] if len(row) > 8 else "",
+                row[9] if len(row) > 9 else "",
+                row[10] if len(row) > 10 else "",
+            )
             for row in source_rows[1:]
             if row and len(row) > 2 and str(row[0]).strip() and str(row[2]).strip()
         }
-        source_link_updates = []
+        source_metadata_updates = []
         for row_number, target_row in enumerate(target_rows[1:], start=2):
             if not target_row or not str(target_row[0]).strip():
                 continue
-            url = source_urls.get(str(target_row[0]).strip())
-            if url:
-                source_link_updates.append({
-                    "range": f"'AI-анализ'!C{row_number}",
-                    "values": [[f'=HYPERLINK("{url}";"{url}")']],
-                })
-        if source_link_updates:
+            metadata = source_metadata.get(str(target_row[0]).strip())
+            if metadata:
+                url, start_at, end_at, execution_term = metadata
+                source_metadata_updates.extend([
+                    {
+                        "range": f"'AI-анализ'!C{row_number}",
+                        "values": [[f'=HYPERLINK("{url}";"{url}")']],
+                    },
+                    {
+                        "range": f"'AI-анализ'!I{row_number}:K{row_number}",
+                        "values": [[start_at, end_at, execution_term]],
+                    },
+                ])
+        if source_metadata_updates:
             target.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "USER_ENTERED", "data": source_link_updates},
+                {"valueInputOption": "USER_ENTERED", "data": source_metadata_updates},
             )
         if additions:
             start = len(target_rows) + 1
@@ -140,7 +189,7 @@ class GoogleSheets:
                 "POST",
                 {
                     "valueInputOption": "USER_ENTERED",
-                    "data": [{"range": f"'AI-анализ'!A{start}:P{end}", "values": additions}],
+                    "data": [{"range": f"'AI-анализ'!A{start}:R{end}", "values": additions}],
                 },
             )
         return {"enabled": True, "appended": len(additions), "existing": len(existing_ids)}
@@ -150,7 +199,7 @@ class GoogleSheets:
         sheet = self.target_sheet("AI-анализ", create=False)
         if not sheet:
             raise SheetsError("Manager workbook has no AI-анализ sheet")
-        header = (self.values("'AI-анализ'!A1:P1") or [[]])[0]
+        header = (self.values("'AI-анализ'!A1:R1") or [[]])[0]
         legacy = [item for item in AI_ANALYSIS_HEADERS if item != "Менеджер"]
         if header == legacy:
             self.request(
@@ -199,7 +248,11 @@ class GoogleSheets:
                     {
                         "setDataValidation": {
                             "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 4, "endColumnIndex": 5},
-                            "rule": {"condition": {"type": "BOOLEAN"}, "strict": True, "showCustomUi": True},
+                            "rule": {
+                                "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": item} for item in MANAGER_DECISIONS]},
+                                "strict": True,
+                                "showCustomUi": True,
+                            },
                         }
                     },
                     {
@@ -652,14 +705,14 @@ class GoogleSheets:
         headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
-        existing = self.values(prefix + "!A1:P2")
+        existing = self.values(prefix + "!A1:R2")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("AI analysis headers differ; refusing to overwrite")
         if not existing or not any(existing[0]):
             self.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:P1", "values": [headers]}]},
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:R1", "values": [headers]}]},
             )
             self.request(
                 ":batchUpdate",
@@ -685,7 +738,10 @@ class GoogleSheets:
                                     "endColumnIndex": 5,
                                 },
                                 "rule": {
-                                    "condition": {"type": "BOOLEAN"},
+                                    "condition": {
+                                        "type": "ONE_OF_LIST",
+                                        "values": [{"userEnteredValue": item} for item in MANAGER_DECISIONS],
+                                    },
                                     "strict": True,
                                     "showCustomUi": True,
                                 },
@@ -728,7 +784,7 @@ class GoogleSheets:
             for row in self.values("'Документы'!A2:A1000")
             if row and str(row[0]).strip()
         }
-        rows = self.values("'AI-анализ'!A1:P1000")
+        rows = self.values("'AI-анализ'!A1:R1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
         ai_id_rows = [
