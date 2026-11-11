@@ -113,7 +113,10 @@ class GoogleSheets:
             row_number
             for row_number, row in enumerate(target_rows[1:], start=2)
             if row and str(row[0]).strip()
-            and (len(row) <= 8 or str(row[8]).strip() not in MANAGER_VISIBLE_AI_DECISIONS)
+            and (
+                len(row) <= 8
+                or str(row[8]).strip() not in MANAGER_VISIBLE_AI_DECISIONS
+            )
         ]
         for row_number in reversed(hidden_rows):
             target.request(
@@ -196,7 +199,15 @@ class GoogleSheets:
                 {"valueInputOption": "USER_ENTERED", "data": source_metadata_updates},
             )
         if additions:
-            start = len(target_rows) + 1
+            # Values API can retain trailing empty rows after historic manual
+            # edits. Append after the last real TenderLand ID, never after an
+            # accidental gap at the bottom of the grid.
+            last_real_row = max(
+                (row_number for row_number, row in enumerate(target_rows[1:], start=2)
+                 if row and str(row[0]).strip()),
+                default=1,
+            )
+            start = last_real_row + 1
             end = start + len(additions) - 1
             manager_sheet = target.target_sheet("AI-анализ")
             # Deleting manager rows above deliberately contracts the sheet's
