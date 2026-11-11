@@ -1,8 +1,8 @@
 [Unit]
-Description=Collect tenders daily at 09:00 Moscow
+Description=Collect tenders daily at 05:00 Moscow
 
 [Timer]
-OnCalendar=*-*-* 09:00:00 Europe/Moscow
+OnCalendar=*-*-* 05:00:00 Europe/Moscow
 Persistent=true
 Unit=tender-search.service
 

@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
+from .bitrix import bitrix_read
+from .bitrix import preview as preview_bitrix
 from .classification import DIRECT, NON_TARGET, PARTNER, classify, default_rules
 from .config import Settings
 from .db import Store
@@ -286,7 +288,11 @@ def run(settings, args):
                 summary["documents"] = discover_and_sync_documents(
                     store, sheets, client, current_records, reference["rules"]
                 )
-                summary["ai_analysis"] = sheets.ensure_ai_analysis()
+                # Keep the AI sheet as a complete, compact queue of the
+                # current direct tenders.  This also refreshes the automatic
+                # TenderLand fields and `Документы!F` links before the 09:20
+                # AI review starts.
+                summary["ai_analysis"] = sheets.clean_ai_analysis()
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -350,6 +356,8 @@ def main():
     sub.add_parser("sync-queues")
     sub.add_parser("clean-ai-analysis")
     sub.add_parser("sync-manager-ai")
+    sub.add_parser("preview-bitrix")
+    sub.add_parser("inspect-bitrix")
     sub.add_parser("refresh-workflow")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
@@ -417,6 +425,17 @@ def main():
     if args.command == "cleanup-drive-duplicates":
         removed = DriveArchive(settings).purge_exact_duplicates(args.folder_id)
         print(json.dumps({"drive_duplicates_trashed": removed}, ensure_ascii=False))
+        return 0
+    if args.command == "inspect-bitrix":
+        categories = bitrix_read("crm.category.list", {"entityTypeId": 2})
+        stages = bitrix_read("crm.status.list", {"filter": {"ENTITY_ID": "DEAL_STAGE_2"}})
+        fields = bitrix_read("crm.deal.fields")
+        users = bitrix_read("user.get", {"FILTER": {"ACTIVE": "Y"}})
+        wanted = ("реестровый номер", "объект закупки", "дата окончания подачи заявок", "ссылка на источник", "наименование заказчика", "дата начала")
+        report = {"categories": categories, "stages": [{"STATUS_ID": x.get("STATUS_ID"), "NAME": x.get("NAME")} for x in stages],
+            "fields": [{"code": code, "title": item.get("formLabel") or item.get("title"), "type": item.get("type")} for code, item in fields.items() if str(item.get("formLabel") or item.get("title") or "").strip().lower() in wanted],
+            "users": [{"ID": x.get("ID"), "NAME": x.get("NAME"), "LAST_NAME": x.get("LAST_NAME")} for x in users]}
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     store = Store(settings.database_url)
     try:
@@ -487,6 +506,8 @@ def main():
         elif args.command == "sync-manager-ai":
             sheets = GoogleSheets(settings)
             print(json.dumps(sheets.sync_manager_ai_analysis(), ensure_ascii=False))
+        elif args.command == "preview-bitrix":
+            print(json.dumps(preview_bitrix(settings, store), ensure_ascii=False, indent=2))
         elif args.command == "refresh-workflow":
             # This is intentionally separate from `run`: no search queries are
             # sent to TenderLand, but all existing queues and document records
