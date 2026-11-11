@@ -32,9 +32,12 @@ ln -sfn "$release" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$ROOT/current"
 install -m 0755 "$release/deploy/run.sh" "$ROOT/bin/run.sh"
 install -m 0755 "$release/deploy/manager-sync.sh" "$ROOT/bin/manager-sync.sh"
+install -m 0644 "$release/deploy/tender-search.service" /etc/systemd/system/tender-search.service
+install -m 0644 "$release/deploy/tender-search.timer" /etc/systemd/system/tender-search.timer
 install -m 0644 "$release/deploy/tender-search-manager-sync.service" /etc/systemd/system/tender-search-manager-sync.service
 install -m 0644 "$release/deploy/tender-search-manager-sync.timer" /etc/systemd/system/tender-search-manager-sync.timer
 systemctl daemon-reload
+systemctl enable --now tender-search.timer
 systemctl enable --now tender-search-manager-sync.timer
 printf '%s\n' "$sha" > "$ROOT/shared/deployed-sha.next"
 mv -f "$ROOT/shared/deployed-sha.next" "$ROOT/shared/deployed-sha"
