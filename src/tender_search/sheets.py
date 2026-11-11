@@ -20,6 +20,7 @@ AI_ANALYSIS_HEADERS = [
     "Решение менеджера",
     "Менеджер",
     "Комментарий",
+    "Комментарий руководителя",
     "Объект закупки",
     "Начало подачи заявок",
     "Окончание подачи заявок",
@@ -95,12 +96,12 @@ class GoogleSheets:
         target_id = self.settings.manager_spreadsheet_id
         if not target_id:
             return {"enabled": False, "appended": 0, "existing": 0}
-        source_rows = self.values("'AI-анализ'!A1:R1000")
+        source_rows = self.values("'AI-анализ'!A1:S1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
         target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
         target._ensure_manager_ai_layout()
-        target_rows = target.values("'AI-анализ'!A1:R1000")
+        target_rows = target.values("'AI-анализ'!A1:S1000")
         if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Manager AI analysis headers differ; refusing manager sync")
         # Removing a row as a whole keeps each remaining manager choice and
@@ -121,7 +122,7 @@ class GoogleSheets:
                 }}}]},
             )
         if hidden_rows:
-            target_rows = target.values("'AI-анализ'!A1:R1000")
+            target_rows = target.values("'AI-анализ'!A1:S1000")
         # The manager workbook is deliberately narrower: it contains only
         # tenders worth a human decision, never AI-confirmed non-targets.
         allowed_source = [
@@ -144,16 +145,16 @@ class GoogleSheets:
             row[4] = ""  # manager decision is deliberately blank on arrival
             row[5] = ""  # manager assignment is human-only
             additions.append(row)
-        # C and I:K belong to the source registry.  The manager is free to
-        # edit only E:F, therefore each sync refreshes the immutable link and
-        # tender dates without disturbing human decisions, assignees, notes or
-        # row order.
+        # C and J:L belong to the source registry.  The manager and the
+        # leader are free to edit E:H, therefore each sync refreshes only the
+        # immutable link and tender dates without disturbing their decisions,
+        # assignees, comments or row order.
         source_metadata = {
             str(row[0]).strip(): (
                 str(row[2]).strip(),
-                row[8] if len(row) > 8 else "",
                 row[9] if len(row) > 9 else "",
                 row[10] if len(row) > 10 else "",
+                row[11] if len(row) > 11 else "",
             )
             for row in source_rows[1:]
             if row and len(row) > 2 and str(row[0]).strip() and str(row[2]).strip()
@@ -171,7 +172,7 @@ class GoogleSheets:
                         "values": [[f'=HYPERLINK("{url}";"{url}")']],
                     },
                     {
-                        "range": f"'AI-анализ'!I{row_number}:K{row_number}",
+                        "range": f"'AI-анализ'!J{row_number}:L{row_number}",
                         "values": [[start_at, end_at, execution_term]],
                     },
                 ])
@@ -213,7 +214,7 @@ class GoogleSheets:
                 "POST",
                 {
                     "valueInputOption": "USER_ENTERED",
-                    "data": [{"range": f"'AI-анализ'!A{start}:R{end}", "values": additions}],
+                    "data": [{"range": f"'AI-анализ'!A{start}:S{end}", "values": additions}],
                 },
             )
         return {"enabled": True, "appended": len(additions), "existing": len(existing_ids)}
@@ -223,7 +224,7 @@ class GoogleSheets:
         sheet = self.target_sheet("AI-анализ", create=False)
         if not sheet:
             raise SheetsError("Manager workbook has no AI-анализ sheet")
-        header = (self.values("'AI-анализ'!A1:R1") or [[]])[0]
+        header = (self.values("'AI-анализ'!A1:S1") or [[]])[0]
         legacy = [item for item in AI_ANALYSIS_HEADERS if item != "Менеджер"]
         if header == legacy:
             self.request(
@@ -729,14 +730,14 @@ class GoogleSheets:
         headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
         prefix = "'AI-анализ'"
-        existing = self.values(prefix + "!A1:R2")
+        existing = self.values(prefix + "!A1:S2")
         if existing and any(existing[0]) and existing[0] != headers:
             raise SheetsError("AI analysis headers differ; refusing to overwrite")
         if not existing or not any(existing[0]):
             self.request(
                 "/values:batchUpdate",
                 "POST",
-                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:R1", "values": [headers]}]},
+                {"valueInputOption": "RAW", "data": [{"range": prefix + "!A1:S1", "values": [headers]}]},
             )
             self.request(
                 ":batchUpdate",
@@ -808,7 +809,7 @@ class GoogleSheets:
             for row in self.values("'Документы'!A2:A1000")
             if row and str(row[0]).strip()
         }
-        rows = self.values("'AI-анализ'!A1:R1000")
+        rows = self.values("'AI-анализ'!A1:S1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
         ai_id_rows = [
