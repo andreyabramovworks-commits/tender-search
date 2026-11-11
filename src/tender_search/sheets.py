@@ -828,32 +828,37 @@ class GoogleSheets:
         return {"headers": len(headers)}
 
     def clean_ai_analysis(self):
-        """Remove whole AI rows whose tender disappeared from the document registry.
+        """Keep AI-analysis as a compact queue of every tender in Documents.
 
-        Rows are deleted, never reconstructed cell-by-cell: manager checkboxes,
-        comments and colours therefore stay attached to their TenderLand ID.
+        Existing rows are moved only by deleting entire rows, so human choices,
+        comments and row colouring remain attached to their TenderLand ID.
+        Missing tender IDs are appended with an empty AI decision: the scheduled
+        analyst then knows exactly which rows still await review.
         """
         ai_sheet = self.target_sheet("AI-анализ", create=True)
         self.ensure_ai_analysis()
-        document_ids = {
-            str(row[0])
+        document_ids = list(dict.fromkeys(
+            str(row[0]).strip()
             for row in self.values("'Документы'!A2:A1000")
             if row and str(row[0]).strip()
-        }
+        ))
+        document_id_set = set(document_ids)
         rows = self.values("'AI-анализ'!A1:T1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
-        ai_id_rows = [
-            (row_index, str(row[0]))
-            for row_index, row in enumerate(rows[1:], start=2)
-            if row and str(row[0]).strip()
-        ]
-        stale_rows = [
-            row_index
-            for row_index, tender_id in ai_id_rows
-            if tender_id not in document_ids
-        ]
-        for row_index in reversed(stale_rows):
+        kept_ids, removal_rows = set(), []
+        for row_index, row in enumerate(rows[1:], start=2):
+            tender_id = str(row[0]).strip() if row else ""
+            if not tender_id:
+                if not any(str(value).strip() for value in row):
+                    removal_rows.append(row_index)
+                    continue
+                raise SheetsError(f"AI row {row_index} has data but no TenderLand ID")
+            if tender_id not in document_id_set or tender_id in kept_ids:
+                removal_rows.append(row_index)
+                continue
+            kept_ids.add(tender_id)
+        for row_index in reversed(removal_rows):
             self.request(
                 ":batchUpdate",
                 "POST",
@@ -872,7 +877,43 @@ class GoogleSheets:
                     ]
                 },
             )
-        return {"removed": len(stale_rows), "kept": len(ai_id_rows) - len(stale_rows)}
+        missing_ids = [tender_id for tender_id in document_ids if tender_id not in kept_ids]
+        if missing_ids:
+            start_row = len(kept_ids) + 2
+            self.request(
+                "/values:batchUpdate",
+                "POST",
+                {
+                    "valueInputOption": "RAW",
+                    "data": [{
+                        "range": f"'AI-анализ'!A{start_row}:A{start_row + len(missing_ids) - 1}",
+                        "values": [[tender_id] for tender_id in missing_ids],
+                    }],
+                },
+            )
+        # Queue rows created above must have the same manual controls as
+        # existing rows, including when the row is later picked up by AI.
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {
+                "requests": [
+                    {
+                        "setDataValidation": {
+                            "range": {"sheetId": ai_sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 6, "endColumnIndex": 7},
+                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": item} for item in MANAGER_DECISIONS]}, "strict": True, "showCustomUi": True},
+                        }
+                    },
+                    {
+                        "setDataValidation": {
+                            "range": {"sheetId": ai_sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 7, "endColumnIndex": 8},
+                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in MANAGER_NAMES]}, "strict": True, "showCustomUi": True},
+                        }
+                    },
+                ]
+            },
+        )
+        return {"removed": len(removal_rows), "added": len(missing_ids), "kept": len(kept_ids) + len(missing_ids)}
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)
