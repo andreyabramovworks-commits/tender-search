@@ -184,6 +184,30 @@ class GoogleSheets:
         if additions:
             start = len(target_rows) + 1
             end = start + len(additions) - 1
+            manager_sheet = target.target_sheet("AI-анализ")
+            # Deleting manager rows above deliberately contracts the sheet's
+            # grid.  Grow it back before appending new eligible tenders,
+            # otherwise a mixed "remove non-targets + add targets" sync can
+            # attempt to write just beyond the new grid boundary.
+            row_count = manager_sheet.get("gridProperties", {}).get("rowCount", 0)
+            if end > row_count:
+                target.request(
+                    ":batchUpdate",
+                    "POST",
+                    {
+                        "requests": [
+                            {
+                                "updateSheetProperties": {
+                                    "properties": {
+                                        "sheetId": manager_sheet["sheetId"],
+                                        "gridProperties": {"rowCount": end + 100},
+                                    },
+                                    "fields": "gridProperties.rowCount",
+                                }
+                            }
+                        ]
+                    },
+                )
             target.request(
                 "/values:batchUpdate",
                 "POST",
