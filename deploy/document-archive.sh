@@ -9,4 +9,4 @@ cd "$ROOT/current"
 # Archive every pending accessible document in one run.  The process remains
 # serialized by this flock and the database advisory lock.
 exec docker compose --env-file "$ROOT/shared/.env" -p tender-search run --rm --no-deps app \
-  tender-search archive-documents
+  tender-search archive-documents --wait-for-lock

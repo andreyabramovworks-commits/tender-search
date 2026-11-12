@@ -475,6 +475,11 @@ def main():
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, help="Optional maximum pending files")
+    archive.add_argument(
+        "--wait-for-lock",
+        action="store_true",
+        help="Wait for an operator refresh instead of failing when the single-writer lock is busy",
+    )
     inspect_files = sub.add_parser("inspect-tenderland-files")
     inspect_files.add_argument("--id", required=True, help="TenderLand ID for authenticated file-route diagnostics")
     sub.add_parser("inspect-document-sheet")
@@ -544,7 +549,11 @@ def main():
         # hand-off before acquiring the single-writer advisory lock.
         print(json.dumps(refresh_without_search(settings), ensure_ascii=False))
         return 0
-    store = Store(settings.database_url)
+    # The scheduled document timer must never race an operator's complete
+    # refresh.  It waits for that refresh to release the single-writer lock;
+    # interactive panel jobs retain the immediate, clear error behaviour.
+    wait_seconds = 30 * 60 if args.command == "archive-documents" and args.wait_for_lock else 0
+    store = open_store(settings.database_url, wait_seconds=wait_seconds)
     try:
         if args.command == "status":
             print(json.dumps(store.status(), ensure_ascii=False, indent=2))
