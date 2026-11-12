@@ -921,7 +921,7 @@ class GoogleSheets:
             )
         return {"headers": len(headers)}
 
-    def clean_ai_analysis(self):
+    def clean_ai_analysis(self, tender_ids=None):
         """Keep AI-analysis as a compact queue of every tender in Тендеры.
 
         Existing rows are moved only by deleting entire rows, so human choices,
@@ -931,11 +931,13 @@ class GoogleSheets:
         """
         ai_sheet = self.target_sheet("AI-анализ", create=True)
         self.ensure_ai_analysis()
-        tender_ids = list(dict.fromkeys(
-            str(row[0]).strip()
-            for row in self.values("'Тендеры'!A2:A1000")
-            if row and str(row[0]).strip()
-        ))
+        if tender_ids is None:
+            tender_ids = [
+                str(row[0]).strip()
+                for row in self.values("'Тендеры'!A2:A1000")
+                if row and str(row[0]).strip()
+            ]
+        tender_ids = list(dict.fromkeys(str(tender_id).strip() for tender_id in tender_ids if str(tender_id).strip()))
         tender_id_set = set(tender_ids)
         rows = self.values("'AI-анализ'!A1:U1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
@@ -1009,6 +1011,34 @@ class GoogleSheets:
         )
         self._refresh_ai_registry_fields()
         return {"removed": len(removal_rows), "added": len(missing_ids), "kept": len(kept_ids) + len(missing_ids)}
+
+    def set_review_visibility(self, visible_ids):
+        """Hide expired rows in the three review queues without deleting history."""
+        visible_ids = {str(tender_id) for tender_id in visible_ids}
+        result = {"hidden": 0, "shown": 0}
+        for title in (self.settings.sheet_title, "Партнёрам", "Нецелевые"):
+            sheet = self.target_sheet(title, create=False)
+            if not sheet:
+                continue
+            rows = self.values("'" + title.replace("'", "''") + "'!A2:A10000")
+            hide, show = [], []
+            for row_number, row in enumerate(rows, start=2):
+                if not row or not str(row[0]).strip():
+                    continue
+                (show if str(row[0]).strip() in visible_ids else hide).append(row_number)
+            for row_numbers, hidden, key in ((hide, True, "hidden"), (show, False, "shown")):
+                for offset in range(0, len(row_numbers), 200):
+                    requests = [
+                        {"updateDimensionProperties": {"range": {
+                            "sheetId": sheet["sheetId"], "dimension": "ROWS",
+                            "startIndex": row_number - 1, "endIndex": row_number,
+                        }, "properties": {"hiddenByUser": hidden}, "fields": "hiddenByUser"}}
+                        for row_number in row_numbers[offset : offset + 200]
+                    ]
+                    if requests:
+                        self.request(":batchUpdate", "POST", {"requests": requests})
+                result[key] += len(row_numbers)
+        return result
 
     def _refresh_ai_registry_fields(self):
         """Fill the non-AI part of the queue directly from the source tabs.

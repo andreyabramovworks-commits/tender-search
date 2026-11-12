@@ -35,19 +35,30 @@ def has_time_to_bid(record, minimum_hours=24):
         return True
 
 
-def sync_review_queues(sheets, records, rules=None):
+def sync_review_queues(sheets, records, rules=None, visible_ids=None):
     buckets = {"Тендеры": [], "Партнёрам": [], "Нецелевые": []}
     routes = {DIRECT: "Тендеры", PARTNER: "Партнёрам", NON_TARGET: "Нецелевые"}
     for record in records:
         decision = classify(record, rules)
         buckets[routes[decision.bucket]].append({**record, "_decision": decision})
     outcome = sheets.sync_partitioned(buckets)
+    if visible_ids is not None and hasattr(sheets, "set_review_visibility"):
+        outcome["visibility"] = sheets.set_review_visibility(visible_ids)
     outcome["counts"] = {title: len(items) for title, items in buckets.items()}
     return outcome
 
 
 def now():
     return datetime.now(UTC).isoformat()
+
+
+def active_direct_records(records, rules, minimum_hours=24):
+    """Return only current direct tenders that belong in documents and AI."""
+    return [
+        record
+        for record in records
+        if classify(record, rules).bucket == DIRECT and has_time_to_bid(record, minimum_hours)
+    ]
 
 
 def open_store(database_url, wait_seconds=0):
@@ -193,7 +204,7 @@ def discover_and_sync_documents(store, sheets, client, records, rules, archive_l
 
 
 def refresh_without_search(settings):
-    """Refresh queues, documents and the AI registry without a new TenderLand search."""
+    """Rebuild documents and AI only for current tenders, without a new search."""
     # The archive timer intentionally has the same database lock.  An operator
     # refresh is safe to wait for its short batch instead of failing immediately.
     store = open_store(settings.database_url, wait_seconds=15 * 60)
@@ -209,16 +220,26 @@ def refresh_without_search(settings):
             }
         )
         records = store.records()
-        summary = {"queues": sync_review_queues(sheets, records, reference["rules"])}
+        minimum_hours = getattr(settings, "min_remaining_hours", 24)
+        visible_ids = {record["id"] for record in records if has_time_to_bid(record, minimum_hours)}
+        active_direct = active_direct_records(records, reference["rules"], minimum_hours)
+        summary = {
+            "queues": sync_review_queues(
+                sheets, records, reference["rules"], visible_ids=visible_ids
+            ),
+            "active_tenders": len(active_direct),
+        }
         client = TenderLand(settings)
         try:
             client.login()
             summary["documents"] = discover_and_sync_documents(
-                store, sheets, client, records, reference["rules"], archive_limit=0
+                store, sheets, client, active_direct, reference["rules"]
             )
         finally:
             client.close()
-        summary["ai_analysis"] = sheets.clean_ai_analysis()
+        summary["ai_analysis"] = sheets.clean_ai_analysis(
+            tender_ids=[record["id"] for record in active_direct]
+        )
         return summary
     finally:
         store.close()
@@ -353,7 +374,16 @@ def run(settings, args):
         if not args.collect_only:
             LOG.info("PANEL_STAGE|4|6|Распределение тендеров по вкладкам")
             current_records = store.records()
-            summary["sheets"] = sync_review_queues(sheets, current_records, reference["rules"])
+            summary["sheets"] = sync_review_queues(
+                sheets,
+                current_records,
+                reference["rules"],
+                visible_ids={
+                    record["id"]
+                    for record in current_records
+                    if has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
+                },
+            )
             if hasattr(store, "seed_document_links"):
                 LOG.info("PANEL_STAGE|5|6|Ссылки документов и очередь Google Drive")
                 active_records = [
@@ -555,7 +585,12 @@ def main():
             sheets = GoogleSheets(settings)
             # The registry is the document queue for direct work only, never
             # the full historical database of target/partner/non-target rows.
-            direct_records = [record for record in store.records() if classify(record).bucket == DIRECT]
+            direct_records = [
+                record
+                for record in store.records()
+                if classify(record).bucket == DIRECT
+                and has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
+            ]
             tender_ids = [record["id"] for record in direct_records]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
@@ -570,10 +605,9 @@ def main():
                     ],
                 }
             )
-            direct_records = [
-                record for record in store.records()
-                if classify(record, reference["rules"]).bucket == DIRECT
-            ]
+            direct_records = active_direct_records(
+                store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            )
             tender_ids = [record["id"] for record in direct_records]
             print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
             print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
@@ -597,10 +631,29 @@ def main():
                     ],
                 }
             )
-            print(json.dumps(sync_review_queues(sheets, store.records(), reference["rules"]), ensure_ascii=False))
+            records = store.records()
+            print(json.dumps(sync_review_queues(
+                sheets,
+                records,
+                reference["rules"],
+                visible_ids={
+                    record["id"]
+                    for record in records
+                    if has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
+                },
+            ), ensure_ascii=False))
         elif args.command == "collect-documents":
             sheets = GoogleSheets(settings)
-            records = [record for record in store.records() if classify(record).bucket == DIRECT]
+            reference = sheets.reference({
+                "keywords": settings.reference_keywords(),
+                "rules": [
+                    dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                    for row in default_rules()
+                ],
+            })
+            records = active_direct_records(
+                store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            )
             client = TenderLand(settings)
             try:
                 client.login()
@@ -617,7 +670,16 @@ def main():
             if args.limit is not None and args.limit < 1:
                 parser.error("--limit must be positive")
             sheets = GoogleSheets(settings)
-            records = [record for record in store.records() if classify(record).bucket == DIRECT]
+            reference = sheets.reference({
+                "keywords": settings.reference_keywords(),
+                "rules": [
+                    dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                    for row in default_rules()
+                ],
+            })
+            records = active_direct_records(
+                store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            )
             result = archive_documents(store, records, settings, limit=args.limit)
             result.update(sheets.sync_documents(store.documents([record["id"] for record in records]), records))
             print(json.dumps(result, ensure_ascii=False))
