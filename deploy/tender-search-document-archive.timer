@@ -1,0 +1,10 @@
+[Unit]
+Description=Process TenderLand document archive queue every 15 minutes
+
+[Timer]
+OnCalendar=*:07,22,37,52
+Persistent=true
+Unit=tender-search-document-archive.service
+
+[Install]
+WantedBy=timers.target

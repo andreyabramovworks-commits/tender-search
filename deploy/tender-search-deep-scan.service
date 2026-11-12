@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly full-window TenderLand reconciliation
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tender-search/bin/deep-run.sh
+TimeoutStartSec=6h
+UMask=0077

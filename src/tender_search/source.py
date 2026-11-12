@@ -62,54 +62,113 @@ def json_value(response):
 class TenderLand:
     def __init__(self, settings):
         self.settings = settings
-        self.session = requests.Session()
-        self.session.headers.update(
-            {"User-Agent": "Mozilla/5.0 tender-search/0.1", "X-Requested-With": "XMLHttpRequest"}
-        )
+        self.session = self._new_session()
+        self.credentials = None
+        self.current_delay = settings.delay_seconds
         self.pages = {}
         self.entities = {}
         self.entity_pages = {}
         self.available_fields = {}
         self.request_count = 0
 
+    @staticmethod
+    def _new_session():
+        session = requests.Session()
+        session.headers.update(
+            {"User-Agent": "Mozilla/5.0 tender-search/0.1", "X-Requested-With": "XMLHttpRequest"}
+        )
+        return session
+
+    def _wait(self, multiplier=1):
+        if self.request_count:
+            time.sleep(self.current_delay * multiplier)
+
+    def _slow_down(self):
+        self.current_delay = min(self.settings.max_delay_seconds, max(self.settings.delay_seconds, self.current_delay * 2))
+
+    def _speed_up(self):
+        # Return to the configured safe floor gradually after a healthy answer.
+        self.current_delay = max(self.settings.delay_seconds, self.current_delay * 0.92)
+
+    def _reset_authenticated_state(self):
+        self.pages.clear()
+        self.entities.clear()
+        self.entity_pages.clear()
+        self.available_fields.clear()
+
     def request(self, method, path, **kwargs):
-        for attempt in range(3):
+        """Request a TenderLand route, restoring a dropped login transparently.
+
+        TenderLand occasionally invalidates a browser session mid-run.  The
+        failed operation is retried after a fresh login; callers therefore do
+        not silently lose the remaining keyword queue.
+        """
+        reauth_attempts = 0
+        max_attempts = max(6, self.settings.max_reauth_attempts * 2)
+        for attempt in range(max_attempts):
             if self.request_count:
-                time.sleep(self.settings.delay_seconds * (2**attempt))
+                self._wait(2**min(attempt, 2))
             self.request_count += 1
             try:
                 response = self.session.request(
                     method, BASE + path, timeout=self.settings.timeout_seconds, **kwargs
                 )
                 if response.status_code in (401, 403):
-                    raise SourceError(f"TenderLand access denied ({response.status_code})")
+                    if reauth_attempts < self.settings.max_reauth_attempts:
+                        reauth_attempts += 1
+                        self._slow_down()
+                        self.login(force=True)
+                        continue
+                    raise SourceError(f"TenderLand access denied after re-login ({response.status_code})")
                 if response.status_code == 429 or response.status_code >= 500:
-                    if attempt < 2:
+                    self._slow_down()
+                    if attempt < max_attempts - 1:
                         continue
                 response.raise_for_status()
+                self._speed_up()
                 return response
             except requests.RequestException as error:
-                if attempt == 2:
+                self._slow_down()
+                if attempt == max_attempts - 1:
                     raise SourceError(
                         "TenderLand network/HTTP error; request details omitted to protect credentials"
                     ) from error
         raise SourceError("TenderLand retry limit exceeded")
 
-    def login(self):
-        credentials = json.loads(self.settings.credentials_file.read_text(encoding="utf-8-sig"))
-        result = json_value(
-            self.request(
-                "POST",
-                "/Account/Login",
-                data={
-                    "login": credentials["username"],
-                    "password": credentials["password"],
-                    "returnUrl": "/Search/Entities?type=Pro",
-                },
-            )
-        )
-        if not result.get("Status"):
-            raise SourceError("TenderLand rejected credentials or account access")
+    def login(self, force=False):
+        if self.credentials is None:
+            self.credentials = json.loads(self.settings.credentials_file.read_text(encoding="utf-8-sig"))
+        if force:
+            self.session.close()
+            self.session = self._new_session()
+            self._reset_authenticated_state()
+        for attempt in range(3):
+            self._wait(2**attempt)
+            self.request_count += 1
+            try:
+                response = self.session.post(
+                    BASE + "/Account/Login",
+                    data={
+                        "login": self.credentials["username"],
+                        "password": self.credentials["password"],
+                        "returnUrl": "/Search/Entities?type=Pro",
+                    },
+                    timeout=self.settings.timeout_seconds,
+                )
+                if response.status_code == 429 or response.status_code >= 500:
+                    self._slow_down()
+                    continue
+                response.raise_for_status()
+                result = json_value(response)
+                if not result.get("Status"):
+                    raise SourceError("TenderLand rejected credentials or account access")
+                self._speed_up()
+                return
+            except requests.RequestException as error:
+                self._slow_down()
+                if attempt == 2:
+                    raise SourceError("TenderLand login network error") from error
+        raise SourceError("TenderLand login retry limit exceeded")
 
     def open_mode(self, mode):
         if mode in self.pages:
@@ -213,13 +272,13 @@ class TenderLand:
             "description": query,
         }
 
-    def search(self, job):
+    def search(self, job, earliest=None):
         base_filters = [
             self.text_filter(job["query"], job["scope"]),
             {"id": 115, "isEnable": True, "name": "tender_status", "type": "value", "value": 1},
         ]
         today = datetime.now(UTC).date()
-        earliest = date(today.year - 5, 1, 1)
+        earliest = earliest or date(today.year - 5, 1, 1)
         yield from self._range(job["mode"], base_filters, earliest, today + timedelta(days=2))
 
     def _range(self, mode, base_filters, start, end):

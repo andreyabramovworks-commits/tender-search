@@ -28,7 +28,14 @@ class Settings:
     sheet_title: str = field(default_factory=lambda: os.getenv("GOOGLE_SHEET_TITLE", "Тендеры"))
     queries_file: Path = field(default_factory=lambda: Path(os.getenv("QUERIES_FILE", "config/queries.json")))
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "data")))
-    delay_seconds: float = field(default_factory=lambda: float(os.getenv("REQUEST_DELAY_SECONDS", "1.5")))
+    # TenderLand is queried serially.  The client adapts this floor upward on
+    # throttling, so a normal healthy session is not artificially slowed down.
+    delay_seconds: float = field(default_factory=lambda: float(os.getenv("REQUEST_DELAY_SECONDS", "0.5")))
+    max_delay_seconds: float = field(default_factory=lambda: float(os.getenv("MAX_REQUEST_DELAY_SECONDS", "8")))
+    max_reauth_attempts: int = field(default_factory=lambda: int(os.getenv("MAX_REAUTH_ATTEMPTS", "8")))
+    search_lookback_days: int = field(default_factory=lambda: int(os.getenv("SEARCH_LOOKBACK_DAYS", "62")))
+    deep_search_lookback_days: int = field(default_factory=lambda: int(os.getenv("DEEP_SEARCH_LOOKBACK_DAYS", "1827")))
+    min_remaining_hours: int = field(default_factory=lambda: int(os.getenv("MIN_REMAINING_HOURS", "24")))
     timeout_seconds: int = field(default_factory=lambda: int(os.getenv("HTTP_TIMEOUT_SECONDS", "60")))
     search_modes: tuple = field(
         default_factory=lambda: tuple(os.getenv("SEARCH_MODES", "Pro,Standard").split(","))
@@ -43,6 +50,11 @@ class Settings:
             not 1 <= self.page_size <= 1000
             or self.max_pages < 1
             or self.delay_seconds < 0
+            or self.max_delay_seconds < self.delay_seconds
+            or self.max_reauth_attempts < 1
+            or self.search_lookback_days < 1
+            or self.deep_search_lookback_days < self.search_lookback_days
+            or self.min_remaining_hours < 0
             or self.archive_max_bytes < 1
         ):
             raise ValueError("Invalid pagination or delay settings")

@@ -1,0 +1,11 @@
+[Unit]
+Description=Archive queued TenderLand documents into Google Drive
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tender-search/bin/document-archive.sh
+TimeoutStartSec=90min
+UMask=0077

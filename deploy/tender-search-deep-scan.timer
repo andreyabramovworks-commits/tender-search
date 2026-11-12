@@ -1,0 +1,11 @@
+[Unit]
+Description=Run weekly TenderLand full-window reconciliation
+
+[Timer]
+# Sunday afternoon avoids competing with the 05:00 daily operational run.
+OnCalendar=Sun *-*-* 13:00:00 Europe/Moscow
+Persistent=true
+Unit=tender-search-deep-scan.service
+
+[Install]
+WantedBy=timers.target

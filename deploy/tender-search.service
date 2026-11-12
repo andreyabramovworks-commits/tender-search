@@ -10,6 +10,9 @@ ExecStart=/opt/tender-search/bin/run.sh run
 # A timed manager sync that yielded to this priority collection is launched
 # as soon as the collection releases its daily-run lock (also after failure).
 ExecStopPost=/usr/bin/systemctl start --no-block tender-search-manager-sync.service
+# The document queue is intentionally decoupled from the daily search.  Start
+# a bounded batch as soon as new TenderLand links have been discovered.
+ExecStopPost=/usr/bin/systemctl start --no-block tender-search-document-archive.service
 TimeoutStartSec=6h
 UMask=0077
 

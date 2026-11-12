@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -63,12 +63,15 @@ class DriveArchive:
         self.folders = {}
         self.tenderland_session = requests.Session()
         self.tenderland_session.headers.update({"User-Agent": "Mozilla/5.0 tender-search/1.0"})
-        credentials_data = json.loads(settings.credentials_file.read_text(encoding="utf-8-sig"))
+        self.tenderland_credentials = json.loads(settings.credentials_file.read_text(encoding="utf-8-sig"))
+        self.login_tenderland()
+
+    def login_tenderland(self):
         login = self.tenderland_session.post(
             "https://tenderland.ru/Account/Login",
             data={
-                "login": credentials_data["username"],
-                "password": credentials_data["password"],
+                "login": self.tenderland_credentials["username"],
+                "password": self.tenderland_credentials["password"],
                 "returnUrl": "/Search/Entities?type=Pro",
             },
             timeout=60,
@@ -150,6 +153,8 @@ class DriveArchive:
 
     def download(self, url):
         """Download an attachment and resolve a public download landing page."""
+        if urlparse(url).scheme not in {"http", "https"}:
+            raise DriveError("Tender link is not an HTTP(S) document URL")
         session = requests.Session()
         session.headers.update(
             {
@@ -159,6 +164,12 @@ class DriveArchive:
         )
         active_session = self.tenderland_session if url.startswith("https://tenderland.ru/") else session
         response = active_session.get(url, timeout=60, allow_redirects=True)
+        # File storage uses a separate authenticated session.  It may expire
+        # while a document queue is running, so retry the same attachment
+        # after a fresh login instead of permanently losing it.
+        if active_session is self.tenderland_session and response.status_code in {401, 403}:
+            self.login_tenderland()
+            response = active_session.get(url, timeout=60, allow_redirects=True)
         response.raise_for_status()
         if "text/html" in response.headers.get("Content-Type", "").lower():
             page = BeautifulSoup(response.text, "html.parser")
@@ -172,7 +183,7 @@ class DriveArchive:
                     candidates.append(candidate)
             for candidate in candidates:
                 target = urljoin(response.url, candidate)
-                if target == response.url or target.startswith(("javascript:", "#")):
+                if target == response.url or urlparse(target).scheme not in {"http", "https"}:
                     continue
                 follow = session.get(target, timeout=60, allow_redirects=True, headers={"Referer": response.url})
                 follow.raise_for_status()

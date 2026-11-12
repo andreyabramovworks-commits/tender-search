@@ -1,8 +1,14 @@
 from types import SimpleNamespace
 
-from tender_search.cli import run
+from tender_search.cli import has_time_to_bid, run
 from tender_search.model import merge, normalize
 from tender_search.source import SourceError
+
+
+def test_only_explicitly_expired_deadlines_are_excluded():
+    assert not has_time_to_bid({"deadline_at": "2020-01-01T10:00:00+03:00"})
+    assert has_time_to_bid({"deadline_at": "неизвестно"})
+    assert has_time_to_bid({"deadline_at": ""})
 
 
 def test_unavailable_old_tender_does_not_block_new_google_rows(monkeypatch, tmp_path):
@@ -42,7 +48,7 @@ def test_unavailable_old_tender_does_not_block_new_google_rows(monkeypatch, tmp_
         def login(self):
             pass
 
-        def search(self, job):
+        def search(self, job, earliest=None):
             yield normalize({"tender_id": 123, "tender_name": "Леса"}), {}
 
         def enrich(self, record):

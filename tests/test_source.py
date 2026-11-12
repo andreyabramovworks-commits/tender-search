@@ -53,6 +53,29 @@ def test_html_login_page_is_never_an_empty_search():
         json_value(Response())
 
 
+def test_unauthorized_request_reauthenticates_and_repeats(monkeypatch):
+    client = TenderLand(Settings(delay_seconds=0, max_delay_seconds=1))
+    calls, logins = [], []
+
+    class Response:
+        def __init__(self, status):
+            self.status_code = status
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("unexpected HTTP failure")
+
+    def request(*args, **kwargs):
+        calls.append(1)
+        return Response(401 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(client.session, "request", request)
+    monkeypatch.setattr(client, "login", lambda force=False: logins.append(force))
+    assert client.request("GET", "/Search/Find").status_code == 200
+    assert logins == [True]
+    assert len(calls) == 2
+
+
 def test_query_syntax_is_preserved_for_native_search():
     value = TenderLand.text_filter("БПЛА++строител++лес", "documents")
     assert value["name"] == "tender_files"
@@ -109,3 +132,14 @@ def test_document_collector_drops_site_navigation_and_privacy_files():
     assert [(x["title"], x["url"]) for x in result] == [
         ("Извещение о закупке", "https://example.org/files/notice.pdf")
     ]
+
+
+def test_document_collector_never_treats_phone_or_mail_as_files():
+    result = TenderLand._document_links(
+        """
+        <section class='documents'><a href='tel:+74997030451'>Скачать ТЗ</a>
+        <a href='mailto:offer@example.org'>Документация</a></section>
+        """,
+        "https://example.org/procedure/123",
+    )
+    assert result == []

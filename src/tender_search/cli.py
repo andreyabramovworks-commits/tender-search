@@ -3,7 +3,8 @@ import json
 import logging
 import sys
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -17,6 +18,20 @@ from .sheets import GoogleSheets
 from .source import SourceError, TenderLand
 
 LOG = logging.getLogger("tender-search")
+
+
+def has_time_to_bid(record, minimum_hours=24):
+    """Keep ambiguous dates for review; exclude only certainly expired tenders."""
+    value = str(record.get("deadline_at") or "").strip()
+    if not value:
+        return True
+    try:
+        deadline = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        return deadline.astimezone(UTC) > datetime.now(UTC) + timedelta(hours=minimum_hours)
+    except ValueError:
+        return True
 
 
 def sync_review_queues(sheets, records, rules=None):
@@ -43,6 +58,13 @@ def archive_documents(store, records, settings, limit=None):
     archived = 0
     candidates = []
     for document in store.documents(list(by_id)):
+        # Keep legacy audit rows, but do not attempt telephone/mail links as
+        # downloads.  Only public web URLs can be tender attachments.
+        if urlparse(document["url"]).scheme not in {"http", "https"}:
+            store.set_archive_result(
+                document["tender_id"], document["url"], None, "ignored_invalid_link"
+            )
+            continue
         likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
         tenderland_file = "/File/Get?storageId=" in document["url"]
         # TenderLand uses -1 as a placeholder when the attachment is no
@@ -103,7 +125,7 @@ def archive_documents(store, records, settings, limit=None):
     return {"archived": archived}
 
 
-def discover_and_sync_documents(store, sheets, client, records, rules):
+def discover_and_sync_documents(store, sheets, client, records, rules, archive_limit=None):
     """Collect attachment URLs for direct tenders, then publish only attachments.
 
     The collector fetches HTML pages only. It stores URLs and metadata; tender
@@ -145,7 +167,11 @@ def discover_and_sync_documents(store, sheets, client, records, rules):
             discovered += len(links)
         except Exception as error:  # One unavailable procurement site must not stop the daily run.
             LOG.warning("Document registry unavailable for tender %s: %s", record["id"], str(error)[:180])
-    result = archive_documents(store, direct_records, client.settings)
+    result = (
+        archive_documents(store, direct_records, client.settings, limit=archive_limit)
+        if archive_limit != 0
+        else {"archived": 0, "queued": len(store.documents(direct_ids))}
+    )
     result.update(sheets.sync_documents(store.documents(direct_ids), direct_records))
     result["scanned_tenders"] = len(direct_records)
     result["new_links_seen"] = discovered
@@ -172,7 +198,7 @@ def refresh_without_search(settings):
         try:
             client.login()
             summary["documents"] = discover_and_sync_documents(
-                store, sheets, client, records, reference["rules"]
+                store, sheets, client, records, reference["rules"], archive_limit=0
             )
         finally:
             client.close()
@@ -229,6 +255,14 @@ def run(settings, args):
         summary["jobs_planned"] = len(jobs)
         if args.limit_jobs:
             jobs = jobs[: args.limit_jobs]
+        lookback_days = (
+            getattr(settings, "deep_search_lookback_days", 1827)
+            if getattr(args, "deep", False)
+            else getattr(settings, "search_lookback_days", 62)
+        )
+        search_start = datetime.now(UTC).date() - timedelta(days=lookback_days)
+        summary["search_lookback_days"] = lookback_days
+        summary["skipped_deadline"] = 0
         LOG.info("PANEL_STAGE|2|6|Поиск TenderLand по ключевикам")
         for index, job in enumerate(jobs, 1):
             count = 0
@@ -242,7 +276,10 @@ def run(settings, args):
                 job["query"],
             )
             try:
-                for incoming, raw in client.search(job):
+                for incoming, raw in client.search(job, earliest=search_start):
+                    if not has_time_to_bid(incoming, getattr(settings, "min_remaining_hours", 24)):
+                        summary["skipped_deadline"] += 1
+                        continue
                     tender_id = incoming["id"]
                     if tender_id not in details_cache:
                         try:
@@ -266,7 +303,10 @@ def run(settings, args):
                 LOG.error("Job failed: %s", error)
         # A tender no longer returned by the active filter may have closed/been cancelled.
         LOG.info("PANEL_STAGE|3|6|Проверка ранее найденных тендеров")
-        missing = [x for x in store.records() if x["id"] not in seen]
+        missing = [
+            x for x in store.records()
+            if x["id"] not in seen and has_time_to_bid(x, getattr(settings, "min_remaining_hours", 24))
+        ]
         refreshed = set()
         try:
             for incoming, raw in client.refresh(missing, settings.search_modes[0]):
@@ -287,9 +327,13 @@ def run(settings, args):
             current_records = store.records()
             summary["sheets"] = sync_review_queues(sheets, current_records, reference["rules"])
             if hasattr(store, "seed_document_links"):
-                LOG.info("PANEL_STAGE|5|6|Ссылки и архив документов Google Drive")
+                LOG.info("PANEL_STAGE|5|6|Ссылки документов и очередь Google Drive")
+                active_records = [
+                    record for record in current_records
+                    if has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
+                ]
                 summary["documents"] = discover_and_sync_documents(
-                    store, sheets, client, current_records, reference["rules"]
+                    store, sheets, client, active_records, reference["rules"], archive_limit=0
                 )
                 # Keep the AI sheet as a complete, compact queue of the
                 # current direct tenders.  This also refreshes the automatic
@@ -351,6 +395,10 @@ def main():
     collect.add_argument("--collect-only", action="store_true", help="Store results without Google sync")
     collect.add_argument(
         "--limit-jobs", type=int, help="Diagnostic partial run; never reported as full success"
+    )
+    collect.add_argument(
+        "--deep", action="store_true",
+        help="Weekly long-window reconciliation; normal runs use SEARCH_LOOKBACK_DAYS",
     )
     sub.add_parser("check")
     sub.add_parser("status")
