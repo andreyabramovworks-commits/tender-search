@@ -8,6 +8,6 @@ COPY src ./src
 COPY migrations ./migrations
 COPY config ./config
 COPY scripts ./scripts
-RUN pip install --no-cache-dir --no-deps . && useradd --uid 10001 --create-home tender
+RUN pip install --no-cache-dir --no-deps --force-reinstall . && useradd --uid 10001 --create-home tender
 USER 10001:10001
 CMD ["tender-search", "run"]
