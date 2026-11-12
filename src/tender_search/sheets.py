@@ -600,6 +600,10 @@ class GoogleSheets:
         for document in documents:
             if document["kind"] in {"tenderland_card", "source_entry"}:
                 continue
+            # Telephone/mail/javascript links from a source page are not
+            # attachments and must never appear in the operator registry.
+            if not document["url"].startswith(("https://", "http://")):
+                continue
             # Old archive attempts could expand Office containers into their
             # internal XML members. They are audit artefacts, never useful
             # tender documents for a manager and must not pollute the sheet.
