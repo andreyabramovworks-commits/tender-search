@@ -2,10 +2,12 @@
 Description=Keep manager tender workbook up to date during the workday
 
 [Timer]
-OnCalendar=*-*-* *:00:00 Europe/Moscow
-OnCalendar=*-*-* *:15:00 Europe/Moscow
-OnCalendar=*-*-* *:30:00 Europe/Moscow
-OnCalendar=*-*-* *:45:00 Europe/Moscow
+# Keep the 15-minute cadence, offset from the priority 05:00 daily collection
+# so both services can never race for their first lock acquisition.
+OnCalendar=*-*-* *:02:00 Europe/Moscow
+OnCalendar=*-*-* *:17:00 Europe/Moscow
+OnCalendar=*-*-* *:32:00 Europe/Moscow
+OnCalendar=*-*-* *:47:00 Europe/Moscow
 Persistent=true
 Unit=tender-search-manager-sync.service
 
