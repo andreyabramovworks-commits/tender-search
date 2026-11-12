@@ -509,6 +509,11 @@ def main():
         removed = DriveArchive(settings).purge_exact_duplicates(args.folder_id)
         print(json.dumps({"drive_duplicates_trashed": removed}, ensure_ascii=False))
         return 0
+    if args.command == "refresh-workflow":
+        # refresh_without_search owns the store so it can wait for an archive
+        # hand-off before acquiring the single-writer advisory lock.
+        print(json.dumps(refresh_without_search(settings), ensure_ascii=False))
+        return 0
     store = Store(settings.database_url)
     try:
         if args.command == "status":
@@ -581,11 +586,6 @@ def main():
         elif args.command == "sync-manager-visibility":
             sheets = GoogleSheets(settings)
             print(json.dumps(sheets.sync_manager_ai_visibility(), ensure_ascii=False))
-        elif args.command == "refresh-workflow":
-            # This is intentionally separate from `run`: no search queries are
-            # sent to TenderLand, but all existing queues and document records
-            # are reconciled before the AI registry is pruned by TenderLand ID.
-            print(json.dumps(refresh_without_search(settings), ensure_ascii=False))
         elif args.command == "sync-queues":
             sheets = GoogleSheets(settings)
             reference = sheets.reference(
