@@ -1,6 +1,8 @@
 import re
 import time
+from datetime import date, datetime
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.service_account import Credentials
@@ -48,6 +50,36 @@ MANAGER_NAMES = [
     "Колесников Данил",
 ]
 CRM_STATUS_HEADER = "Статус CRM"
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def submission_deadline_is_today_or_past(value, today=None):
+    """True only for a known deadline on the current/past Moscow date.
+
+    Blank and malformed dates must remain visible: hiding an ambiguous tender is
+    worse than showing one extra row to a manager.
+    """
+    value = str(value or "").strip()
+    if not value:
+        return False
+    today = today or datetime.now(MOSCOW).date()
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        for pattern in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+            try:
+                moment = datetime.strptime(value, pattern)
+                break
+            except ValueError:
+                moment = None
+        if moment is None:
+            try:
+                return date.fromisoformat(value) <= today
+            except ValueError:
+                return False
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(MOSCOW)
+    return moment.date() <= today
 
 
 class GoogleSheets:
@@ -108,30 +140,10 @@ class GoogleSheets:
         target_rows = target.values("'AI-анализ'!A1:U1000")
         if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Manager AI analysis headers differ; refusing manager sync")
-        # Removing a row as a whole keeps each remaining manager choice and
-        # manually applied formatting attached to its own TenderLand ID.
-        hidden_rows = [
-            row_number
-            for row_number, row in enumerate(target_rows[1:], start=2)
-            if row and str(row[0]).strip()
-            and (
-                len(row) <= 8
-                or str(row[8]).strip() not in MANAGER_VISIBLE_AI_DECISIONS
-            )
-        ]
-        for row_number in reversed(hidden_rows):
-            target.request(
-                ":batchUpdate",
-                "POST",
-                {"requests": [{"deleteDimension": {"range": {
-                    "sheetId": target.target_sheet("AI-анализ")["sheetId"],
-                    "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number,
-                }}}]},
-            )
-        if hidden_rows:
-            target_rows = target.values("'AI-анализ'!A1:U1000")
         # The manager workbook is deliberately narrower: it contains only
-        # tenders worth a human decision, never AI-confirmed non-targets.
+        # tenders worth a human decision on their first arrival.  Existing
+        # rows are never deleted: a manager's decision, assignee, comments and
+        # manual colours are work records, not cache data.
         allowed_source = [
             row for row in source_rows[1:]
             if row and len(row) > 8 and str(row[0]).strip()
@@ -149,13 +161,11 @@ class GoogleSheets:
             tender_id = str(row[0]).strip()
             url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
             row[4] = f'=HYPERLINK("{url}";"{url}")'
-            row[7] = ""  # manager decision is deliberately blank on arrival
-            row[8] = ""  # manager assignment is human-only
+            row[6] = ""  # manager decision is deliberately blank on arrival
+            row[7] = ""  # manager assignment is human-only
             additions.append(row)
-        # B:G and M:N belong to the source registry. The manager and the
-        # leader are free to edit H:L, therefore each sync refreshes only
-        # immutable procurement facts without disturbing their decisions,
-        # assignees, comments or row order.
+        # Refresh procurement facts in B:F, L:M and T. G:H are manager-owned,
+        # J:K contain human comments, and V is reserved for CRM status.
         source_metadata = {
             str(row[0]).strip(): (
                 row[1] if len(row) > 1 else "",
@@ -244,7 +254,73 @@ class GoogleSheets:
                     "data": [{"range": f"'AI-анализ'!A{start}:U{end}", "values": additions}],
                 },
             )
-        return {"enabled": True, "appended": len(additions), "existing": len(existing_ids)}
+        visibility = target.sync_manager_ai_visibility(source_rows)
+        return {
+            "enabled": True,
+            "appended": len(additions),
+            "existing": len(existing_ids),
+            "visibility": visibility,
+        }
+
+    def sync_manager_ai_visibility(self, source_rows=None):
+        """Hide stale manager rows without deleting any human work.
+
+        Google Sheets keeps cell notes, dropdowns, checkboxes and manual
+        formatting on a hidden row.  This is deliberately preferable to
+        moving a tender into an archive sheet, where those artefacts could be
+        lost or become detached from its TenderLand ID.
+        """
+        if source_rows is None:
+            source_rows = self.values("'AI-анализ'!A1:U1000")
+        if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Source AI analysis headers differ; refusing manager visibility sync")
+        target_id = self.settings.manager_spreadsheet_id
+        if not target_id:
+            return {"enabled": False, "hidden": 0, "shown": 0, "unchanged": 0}
+        target = self if self.spreadsheet_id == target_id else GoogleSheets(
+            self.settings, session=self.session, spreadsheet_id=target_id
+        )
+        sheet = target.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            raise SheetsError("Manager workbook has no AI-анализ sheet")
+        target_rows = target.values("'AI-анализ'!A1:U1000")
+        if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Manager AI analysis headers differ; refusing visibility sync")
+        source_by_id = {
+            str(row[0]).strip(): row
+            for row in source_rows[1:]
+            if row and str(row[0]).strip()
+        }
+        hide, show = [], []
+        for row_number, row in enumerate(target_rows[1:], start=2):
+            if not row or not str(row[0]).strip():
+                continue
+            source = source_by_id.get(str(row[0]).strip())
+            ai_decision = str(source[8]).strip() if source and len(source) > 8 else ""
+            deadline = source[2] if source and len(source) > 2 else (row[2] if len(row) > 2 else "")
+            should_hide = (
+                ai_decision not in MANAGER_VISIBLE_AI_DECISIONS
+                or submission_deadline_is_today_or_past(deadline)
+            )
+            (hide if should_hide else show).append(row_number)
+
+        def requests_for(rows, hidden):
+            return [
+                {"updateDimensionProperties": {"range": {
+                    "sheetId": sheet["sheetId"], "dimension": "ROWS",
+                    "startIndex": row_number - 1, "endIndex": row_number,
+                }, "properties": {"hiddenByUser": hidden}, "fields": "hiddenByUser"}}
+                for row_number in rows
+            ]
+
+        # Keep requests modest for Sheets API reliability on a long-lived
+        # manager register.
+        for rows, hidden in ((hide, True), (show, False)):
+            for offset in range(0, len(rows), 200):
+                requests = requests_for(rows[offset: offset + 200], hidden)
+                if requests:
+                    target.request(":batchUpdate", "POST", {"requests": requests})
+        return {"enabled": True, "hidden": len(hide), "shown": len(show), "unchanged": 0}
 
     def _ensure_manager_ai_layout(self):
         """Normalise the manager copy once, without changing any tender rows."""

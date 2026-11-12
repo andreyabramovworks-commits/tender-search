@@ -6,6 +6,7 @@ import pytest
 from tender_search.config import Settings
 from tender_search.model import HEADERS, merge, normalize, sheet_row
 from tender_search.sheets import GoogleSheets, SheetsError
+from tender_search.sheets import submission_deadline_is_today_or_past
 
 
 class Response:
@@ -124,3 +125,12 @@ def test_existing_rows_are_compacted_after_a_move():
     assert result["cleared"] == 1
     assert fake.rows[1][0] == "123"
     assert not any(fake.rows[2])
+
+
+def test_manager_visibility_hides_only_known_today_or_past_deadlines():
+    today = __import__("datetime").date(2026, 11, 12)
+    assert submission_deadline_is_today_or_past("2026-11-12T23:59:00+03:00", today)
+    assert submission_deadline_is_today_or_past("11.11.2026 10:00", today)
+    assert not submission_deadline_is_today_or_past("2026-11-13T00:00:00+03:00", today)
+    assert not submission_deadline_is_today_or_past("")
+    assert not submission_deadline_is_today_or_past("неизвестно", today)
