@@ -207,6 +207,7 @@ def run(settings, args):
     details_cache = {}
     fatal = None
     try:
+        LOG.info("PANEL_STAGE|1|6|Подготовка: подключение к таблице и TenderLand")
         reference = {
             "keywords": settings.reference_keywords() if hasattr(settings, "reference_keywords") else None,
             "rules": [
@@ -228,6 +229,7 @@ def run(settings, args):
         summary["jobs_planned"] = len(jobs)
         if args.limit_jobs:
             jobs = jobs[: args.limit_jobs]
+        LOG.info("PANEL_STAGE|2|6|Поиск TenderLand по ключевикам")
         for index, job in enumerate(jobs, 1):
             count = 0
             LOG.info(
@@ -263,6 +265,7 @@ def run(settings, args):
                 summary["jobs_failed"] += 1
                 LOG.error("Job failed: %s", error)
         # A tender no longer returned by the active filter may have closed/been cancelled.
+        LOG.info("PANEL_STAGE|3|6|Проверка ранее найденных тендеров")
         missing = [x for x in store.records() if x["id"] not in seen]
         refreshed = set()
         try:
@@ -280,9 +283,11 @@ def run(settings, args):
         summary["not_refreshed"] = len(missing) - len(refreshed)
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
+            LOG.info("PANEL_STAGE|4|6|Распределение тендеров по вкладкам")
             current_records = store.records()
             summary["sheets"] = sync_review_queues(sheets, current_records, reference["rules"])
             if hasattr(store, "seed_document_links"):
+                LOG.info("PANEL_STAGE|5|6|Ссылки и архив документов Google Drive")
                 summary["documents"] = discover_and_sync_documents(
                     store, sheets, client, current_records, reference["rules"]
                 )
@@ -290,6 +295,7 @@ def run(settings, args):
                 # current direct tenders.  This also refreshes the automatic
                 # TenderLand fields and `Документы!F` links before the 09:20
                 # AI review starts.
+                LOG.info("PANEL_STAGE|6|6|Обновление очереди AI-анализа")
                 summary["ai_analysis"] = sheets.clean_ai_analysis()
             summary["synced"] = True
     except Exception as error:
