@@ -3,7 +3,9 @@
 set -Eeuo pipefail
 ROOT=/opt/tender-search
 REPO=https://github.com/andreyabramovworks-commits/tender-search.git
-exec 9>"$ROOT/shared/operation.lock"
+# Deployment has an independent lock.  Release checks and immutable-image
+# deployment must not suppress a scheduled TenderLand collection.
+exec 9>"$ROOT/shared/deploy.lock"
 flock -n 9 || exit 0
 if [[ ! -d "$ROOT/repo.git" ]]; then
   git clone --bare "$REPO" "$ROOT/repo.git"

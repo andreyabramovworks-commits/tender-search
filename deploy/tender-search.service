@@ -7,6 +7,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/tender-search/bin/run.sh run
+# A timed manager sync that yielded to this priority collection is launched
+# as soon as the collection releases its daily-run lock (also after failure).
+ExecStopPost=/usr/bin/systemctl start --no-block tender-search-manager-sync.service
 TimeoutStartSec=6h
 UMask=0077
 
