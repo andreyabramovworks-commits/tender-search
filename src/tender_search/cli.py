@@ -247,14 +247,26 @@ def run(settings, args):
             if hasattr(sheets, "reference"):
                 reference = sheets.reference(reference)
         client.login()
-        jobs = (
-            list(settings.jobs(reference["keywords"]))
-            if reference["keywords"] is not None
-            else list(settings.jobs())
-        )
-        summary["jobs_planned"] = len(jobs)
+        if getattr(args, "retry_latest", False):
+            retry_of, jobs = store.latest_failed_jobs()
+            if not jobs:
+                raise SourceError("No failed TenderLand jobs found for retry")
+            labels = {
+                (item["category"], item["query"]): item["label"]
+                for item in (reference["keywords"] or settings.reference_keywords())
+            }
+            jobs = [{**job, "label": labels.get((job["category"], job["query"]), job["query"])} for job in jobs]
+            summary["retry_of"] = retry_of
+            LOG.info("Retrying %s failed jobs from run %s", len(jobs), retry_of)
+        else:
+            jobs = (
+                list(settings.jobs(reference["keywords"]))
+                if reference["keywords"] is not None
+                else list(settings.jobs())
+            )
         if args.limit_jobs:
             jobs = jobs[: args.limit_jobs]
+        summary["jobs_planned"] = len(jobs)
         lookback_days = (
             getattr(settings, "deep_search_lookback_days", 1827)
             if getattr(args, "deep", False)
@@ -399,6 +411,10 @@ def main():
     collect.add_argument(
         "--deep", action="store_true",
         help="Weekly long-window reconciliation; normal runs use SEARCH_LOOKBACK_DAYS",
+    )
+    collect.add_argument(
+        "--retry-latest", action="store_true",
+        help="Retry only failed jobs from the latest partial/full-search run",
     )
     sub.add_parser("check")
     sub.add_parser("status")

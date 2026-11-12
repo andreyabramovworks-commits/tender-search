@@ -18,8 +18,10 @@ JOBS = {
     "clean-ai-analysis": ("Обновить очередь AI-анализа", ["clean-ai-analysis"], "Очередь AI"),
     "sync-manager-ai": ("Обновить таблицу менеджеров", ["sync-manager-ai"], "Копия менеджеров"),
     "refresh-workflow": ("Обновить всё без нового поиска", ["refresh-workflow"], "Все реестры"),
+    "retry-failed": ("Повторить сорванные запросы", ["run", "--retry-latest"], "Подготовка повтора"),
     "run": ("Полный ежедневный поиск", ["run"], "Подготовка"),
 }
+SEARCH_JOBS = {"run", "retry-failed"}
 WEIGHTS = (2, 60, 12, 8, 13, 5)
 STATE = {"status": "idle", "job": "", "label": "Ожидание команды", "output": "", "progress": 0,
          "stage": "", "stage_index": 0, "stage_total": 0, "stage_progress": 0,
@@ -44,12 +46,12 @@ def append_output(line):
         if stage:
             index, total, title = int(stage.group(1)), int(stage.group(2)), stage.group(3).strip()
             STATE.update(stage=title, stage_index=index, stage_total=total, stage_progress=0, current="")
-            if STATE["job"] == "run":
+            if STATE["job"] in SEARCH_JOBS:
                 STATE["progress"] = sum(WEIGHTS[:index - 1])
                 STATE["progress_known"] = True
             return
         job = JOB_LINE.search(line)
-        if job and STATE["job"] == "run":
+        if job and STATE["job"] in SEARCH_JOBS:
             current, total, description = int(job.group(1)), int(job.group(2)), job.group(3).strip()
             percent = round(current / total * 100) if total else 0
             STATE.update(stage="Поиск TenderLand по ключевикам", stage_index=2, stage_total=6,
@@ -98,6 +100,16 @@ PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport c
 <div class=card><h3>Пересортировать вкладки</h3><p>Применить фильтры к найденным тендерам. Поиск и документы не запускаются.</p><button data-job=sync-queues>Запустить</button></div><div class=card><h3>Собрать ссылки TenderLand</h3><p>Обновить список файлов в карточках TenderLand, без скачивания файлов.</p><button data-job=collect-documents>Запустить</button></div><div class=card><h3>Загрузить документы</h3><p>Скачать до 20 доступных файлов в Google Drive и обновить реестр.</p><button data-job=archive-documents>Запустить</button></div><div class=card><h3>Обновить «Документы»</h3><p>Опубликовать текущие ссылки, статусы и документы Google Drive.</p><button data-job=sync-documents>Запустить</button></div><div class=card><h3>Пересобрать «Документы»</h3><p>Сверить лист с «Тендерами»: удалить лишнее и добавить недостающее.</p><button data-job=rebuild-documents>Запустить</button></div><div class=card><h3>Обновить очередь AI</h3><p>Сверить все ID, автоматические поля и ссылки документов без AI-решений.</p><button data-job=clean-ai-analysis>Запустить</button></div><div class=card><h3>Обновить таблицу менеджеров</h3><p>Добавить новые AI-анализы, не меняя старые решения, менеджеров и цвета.</p><button data-job=sync-manager-ai>Запустить</button></div><div class=card><h3>Обновить всё без поиска</h3><p>Фильтры, очереди, документы, Drive и AI-реестр. AI-тексты не создаются.</p><button data-job=refresh-workflow>Запустить</button></div><div class=card><h3>Полный ежедневный поиск</h3><p>Поиск по ключевикам, карточки, фильтры, документы, Drive и очередь AI.</p><button data-job=run>Запустить</button></div></div>
 <section class=status><div id=label class=state>Загрузка…</div><div id=meta class=meta>—</div><div class=stage-box><div id=stage class=stage-title>—</div><div id=current class=current>—</div><div class=bar-row><div class=bar><div id=stageFill class='fill stage-fill'></div></div><span id=stagePct class=pct>0%</span></div></div><div class=bar-row><b>Общий прогресс</b><div class=bar><div id=fill class=fill></div></div><span id=percent class=pct>0%</span></div><div class=log-head><b>Живой журнал процесса</b><button id=copy>Копировать журнал</button></div><pre id=out>Операция ещё не запущена.</pre></section></div>
 <script>const $=id=>document.getElementById(id);async function state(){try{let s=await fetch('/api/state',{cache:'no-store'}).then(x=>x.json()),known=!!s.progress_known;$('label').textContent=s.label;$('badge').textContent=s.status==='running'?'Выполняется':s.status==='success'?'Готово':s.status==='failed'?'Ошибка':'Ожидание';$('meta').textContent=[s.started_at&&'Начато: '+s.started_at,s.pid&&'PID: '+s.pid].filter(Boolean).join(' · ')||'Операция не запущена';$('stage').textContent=(s.stage_index&&s.stage_total?'Этап '+s.stage_index+' из '+s.stage_total+' · ':'')+(s.stage||'—');$('current').textContent=s.current||'—';$('percent').textContent=known?s.progress+'%':'выполняется';$('stagePct').textContent=known?s.stage_progress+'%':'выполняется';$('fill').style.width=known?s.progress+'%':'0';$('stageFill').style.width=known?s.stage_progress+'%':'0';$('fill').classList.toggle('indeterminate',s.status==='running'&&!known);$('stageFill').classList.toggle('indeterminate',s.status==='running'&&!known);$('out').textContent=s.output||'Журнал появится после запуска.';document.querySelectorAll('button[data-job]').forEach(b=>b.disabled=s.status==='running')}catch(e){$('label').textContent='Нет связи с панелью';$('current').textContent=e.message}}document.querySelectorAll('button[data-job]').forEach(b=>b.onclick=async()=>{let r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job:b.dataset.job})});let x=await r.json();if(!x.ok)alert(x.message);state()});$('copy').onclick=async()=>{await navigator.clipboard.writeText($('out').textContent);$('copy').textContent='Скопировано';setTimeout(()=>$('copy').textContent='Копировать журнал',1300)};state();setInterval(state,1500)</script>"""
+
+# This narrow retry action is generated separately so it remains visible even
+# while the static layout above is kept compact for the local-only panel.
+PAGE = PAGE.replace(
+    "<section class=status>",
+    "<div class=card><h3>Повторить сорванные запросы</h3>"
+    "<p>Повторить только запросы, не завершившиеся в последнем частичном запуске. "
+    "Полный список ключевиков заново не запускается.</p>"
+    "<button data-job=retry-failed>Запустить повтор</button></div><section class=status>",
+)
 
 
 class Handler(BaseHTTPRequestHandler):

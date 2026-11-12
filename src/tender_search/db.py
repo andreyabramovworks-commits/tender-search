@@ -127,6 +127,22 @@ class Store:
                 )
             )
 
+    def latest_failed_jobs(self):
+        """Return only the unfinished search jobs from the latest partial run."""
+        with Session(self.engine) as session:
+            run = session.scalar(
+                select(Run).where(Run.status.in_(("partial", "failed"))).order_by(Run.started_at.desc())
+            )
+            if not run:
+                return None, []
+            rows = session.scalars(
+                select(QueryRun).where(QueryRun.run_id == run.id, QueryRun.status == "failed").order_by(QueryRun.id)
+            ).all()
+            return str(run.id), [
+                {"category": row.category, "query": row.query, "mode": row.mode, "scope": row.scope}
+                for row in rows
+            ]
+
     def upsert(self, incoming, raw, match, now):
         with Session(self.engine) as session, session.begin():
             row = session.get(Tender, int(incoming["id"]))
