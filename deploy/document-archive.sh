@@ -6,7 +6,7 @@ exec 9>"$ROOT/shared/document-archive.lock"
 flock -n 9 || exit 0
 export RELEASE_SHA="$(cat "$ROOT/shared/deployed-sha")" TENDER_ROOT="$ROOT"
 cd "$ROOT/current"
-# One controlled batch per run: it protects source platforms and Google Drive
-# while letting the timer steadily empty the queue during the day.
+# Archive every pending accessible document in one run.  The process remains
+# serialized by this flock and the database advisory lock.
 exec docker compose --env-file "$ROOT/shared/.env" -p tender-search run --rm --no-deps app \
-  tender-search archive-documents --limit 20
+  tender-search archive-documents

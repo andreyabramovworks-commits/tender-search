@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
@@ -47,6 +48,19 @@ def sync_review_queues(sheets, records, rules=None):
 
 def now():
     return datetime.now(UTC).isoformat()
+
+
+def open_store(database_url, wait_seconds=0):
+    """Open the single-writer store, optionally waiting for a safe hand-off."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            return Store(database_url)
+        except RuntimeError as error:
+            if str(error) != "Another tender-search process is running" or time.monotonic() >= deadline:
+                raise
+            LOG.info("Another Tender Search task is active; waiting before refresh")
+            time.sleep(5)
 
 
 def archive_documents(store, records, settings, limit=None):
@@ -180,7 +194,9 @@ def discover_and_sync_documents(store, sheets, client, records, rules, archive_l
 
 def refresh_without_search(settings):
     """Refresh queues, documents and the AI registry without a new TenderLand search."""
-    store = Store(settings.database_url)
+    # The archive timer intentionally has the same database lock.  An operator
+    # refresh is safe to wait for its short batch instead of failing immediately.
+    store = open_store(settings.database_url, wait_seconds=15 * 60)
     try:
         sheets = GoogleSheets(settings)
         reference = sheets.reference(
@@ -428,7 +444,7 @@ def main():
     sub.add_parser("refresh-workflow")
     sub.add_parser("collect-documents")
     archive = sub.add_parser("archive-documents")
-    archive.add_argument("--limit", type=int, default=10, help="Maximum pending files per safe archive batch")
+    archive.add_argument("--limit", type=int, help="Optional maximum pending files")
     inspect_files = sub.add_parser("inspect-tenderland-files")
     inspect_files.add_argument("--id", required=True, help="TenderLand ID for authenticated file-route diagnostics")
     sub.add_parser("inspect-document-sheet")
@@ -598,7 +614,7 @@ def main():
                 client.close()
             print(json.dumps(sheets.sync_documents(store.documents([record["id"] for record in records]), records), ensure_ascii=False))
         elif args.command == "archive-documents":
-            if args.limit < 1:
+            if args.limit is not None and args.limit < 1:
                 parser.error("--limit must be positive")
             sheets = GoogleSheets(settings)
             records = [record for record in store.records() if classify(record).bucket == DIRECT]
