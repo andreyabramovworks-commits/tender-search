@@ -61,6 +61,25 @@ def active_direct_records(records, rules, minimum_hours=24):
     ]
 
 
+def direct_records(records, rules):
+    """Return direct tenders, including old ones retained only as hidden history."""
+    return [record for record in records if classify(record, rules).bucket == DIRECT]
+
+
+def sync_document_registry(store, sheets, records, rules, minimum_hours=24):
+    """Publish direct tender documents, hiding rather than deleting stale history."""
+    direct = direct_records(records, rules)
+    active_ids = {
+        record["id"] for record in direct if has_time_to_bid(record, minimum_hours)
+    }
+    existing_ids = sheets.document_tender_ids() if hasattr(sheets, "document_tender_ids") else set()
+    registry = [record for record in direct if record["id"] in active_ids or record["id"] in existing_ids]
+    result = sheets.sync_documents(store.documents([record["id"] for record in registry]), registry)
+    if hasattr(sheets, "set_documents_visibility"):
+        result["visibility"] = sheets.set_documents_visibility(active_ids)
+    return result
+
+
 def open_store(database_url, wait_seconds=0):
     """Open the single-writer store, optionally waiting for a safe hand-off."""
     deadline = time.monotonic() + wait_seconds
@@ -90,7 +109,6 @@ def archive_documents(store, records, settings, limit=None):
                 document["tender_id"], document["url"], None, "ignored_invalid_link"
             )
             continue
-        likely_zip = "zip" in document["title"].lower() or document["kind"].lower() == "zip"
         tenderland_file = "/File/Get?storageId=" in document["url"]
         # TenderLand uses -1 as a placeholder when the attachment is no
         # longer available. Retrying it costs a network timeout and cannot
@@ -98,9 +116,10 @@ def archive_documents(store, records, settings, limit=None):
         # not let it delay the whole daily run.
         if "storageId=-1" in document["url"]:
             continue
-        if document["kind"] in {"tenderland_card", "source_entry"} or (
-            document["archive_status"] == "archived" and not likely_zip
-        ) or (
+        if document["kind"] in {"tenderland_card", "source_entry"} or document["archive_status"] in {
+            "archived",
+            "unpacked",
+        } or (
             document["archive_status"] == "download_failed" and not tenderland_file
         ):
             continue
@@ -150,7 +169,9 @@ def archive_documents(store, records, settings, limit=None):
     return {"archived": archived}
 
 
-def discover_and_sync_documents(store, sheets, client, records, rules, archive_limit=None):
+def discover_and_sync_documents(
+    store, sheets, client, records, rules, archive_limit=None, registry_records=None, minimum_hours=24
+):
     """Collect attachment URLs for direct tenders, then publish only attachments.
 
     The collector fetches HTML pages only. It stores URLs and metadata; tender
@@ -197,7 +218,8 @@ def discover_and_sync_documents(store, sheets, client, records, rules, archive_l
         if archive_limit != 0
         else {"archived": 0, "queued": len(store.documents(direct_ids))}
     )
-    result.update(sheets.sync_documents(store.documents(direct_ids), direct_records))
+    registry_records = registry_records if registry_records is not None else direct_records
+    result.update(sync_document_registry(store, sheets, registry_records, rules, minimum_hours))
     result["scanned_tenders"] = len(direct_records)
     result["new_links_seen"] = discovered
     return result
@@ -222,6 +244,7 @@ def refresh_without_search(settings):
         records = store.records()
         minimum_hours = getattr(settings, "min_remaining_hours", 24)
         visible_ids = {record["id"] for record in records if has_time_to_bid(record, minimum_hours)}
+        all_direct = direct_records(records, reference["rules"])
         active_direct = active_direct_records(records, reference["rules"], minimum_hours)
         summary = {
             "queues": sync_review_queues(
@@ -233,12 +256,19 @@ def refresh_without_search(settings):
         try:
             client.login()
             summary["documents"] = discover_and_sync_documents(
-                store, sheets, client, active_direct, reference["rules"]
+                store,
+                sheets,
+                client,
+                active_direct,
+                reference["rules"],
+                registry_records=all_direct,
+                minimum_hours=minimum_hours,
             )
         finally:
             client.close()
         summary["ai_analysis"] = sheets.clean_ai_analysis(
-            tender_ids=[record["id"] for record in active_direct]
+            tender_ids=[record["id"] for record in active_direct],
+            retained_ids=[record["id"] for record in all_direct],
         )
         return summary
     finally:
@@ -386,19 +416,28 @@ def run(settings, args):
             )
             if hasattr(store, "seed_document_links"):
                 LOG.info("PANEL_STAGE|5|6|Ссылки документов и очередь Google Drive")
-                active_records = [
-                    record for record in current_records
-                    if has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
-                ]
+                minimum_hours = getattr(settings, "min_remaining_hours", 24)
+                all_direct = direct_records(current_records, reference["rules"])
+                active_records = [record for record in all_direct if has_time_to_bid(record, minimum_hours)]
                 summary["documents"] = discover_and_sync_documents(
-                    store, sheets, client, active_records, reference["rules"], archive_limit=0
+                    store,
+                    sheets,
+                    client,
+                    active_records,
+                    reference["rules"],
+                    archive_limit=0,
+                    registry_records=all_direct,
+                    minimum_hours=minimum_hours,
                 )
                 # Keep the AI sheet as a complete, compact queue of the
                 # current direct tenders.  This also refreshes the automatic
                 # TenderLand fields and `Документы!F` links before the 09:20
                 # AI review starts.
                 LOG.info("PANEL_STAGE|6|6|Обновление очереди AI-анализа")
-                summary["ai_analysis"] = sheets.clean_ai_analysis()
+                summary["ai_analysis"] = sheets.clean_ai_analysis(
+                    tender_ids=[record["id"] for record in active_records],
+                    retained_ids=[record["id"] for record in all_direct],
+                )
             summary["synced"] = True
     except Exception as error:
         # No credential-bearing response bodies/tracebacks in routine logs.
@@ -571,9 +610,22 @@ def main():
             current_records = store.records()
             print(
                 json.dumps(
-                    sync_review_queues(sheets, current_records, reference["rules"]), ensure_ascii=False
+                    sync_review_queues(
+                        sheets,
+                        current_records,
+                        reference["rules"],
+                        visible_ids={
+                            record["id"]
+                            for record in current_records
+                            if has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
+                        },
+                    ),
+                    ensure_ascii=False,
                 )
             )
+            minimum_hours = getattr(settings, "min_remaining_hours", 24)
+            all_direct = direct_records(current_records, reference["rules"])
+            active_direct = [record for record in all_direct if has_time_to_bid(record, minimum_hours)]
             client = TenderLand(settings)
             try:
                 # Document lists are available from the authenticated TenderLand
@@ -582,27 +634,40 @@ def main():
                 print(
                     json.dumps(
                         discover_and_sync_documents(
-                            store, sheets, client, current_records, reference["rules"]
+                            store,
+                            sheets,
+                            client,
+                            active_direct,
+                            reference["rules"],
+                            registry_records=all_direct,
+                            minimum_hours=minimum_hours,
                         ),
                         ensure_ascii=False,
                     )
                 )
             finally:
                 client.close()
-            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+            print(json.dumps(sheets.clean_ai_analysis(
+                tender_ids=[record["id"] for record in active_direct],
+                retained_ids=[record["id"] for record in all_direct],
+            ), ensure_ascii=False))
         elif args.command == "sync-documents":
             sheets = GoogleSheets(settings)
             # The registry is the document queue for direct work only, never
             # the full historical database of target/partner/non-target rows.
-            direct_records = [
-                record
-                for record in store.records()
-                if classify(record).bucket == DIRECT
-                and has_time_to_bid(record, getattr(settings, "min_remaining_hours", 24))
-            ]
-            tender_ids = [record["id"] for record in direct_records]
-            print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
-            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+            records = store.records()
+            reference = sheets.reference(
+                {
+                    "keywords": settings.reference_keywords(),
+                    "rules": [
+                        dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                        for row in default_rules()
+                    ],
+                }
+            )
+            print(json.dumps(sync_document_registry(
+                store, sheets, records, reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            ), ensure_ascii=False))
         elif args.command == "rebuild-documents":
             sheets = GoogleSheets(settings)
             reference = sheets.reference(
@@ -614,15 +679,31 @@ def main():
                     ],
                 }
             )
-            direct_records = active_direct_records(
-                store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
-            )
-            tender_ids = [record["id"] for record in direct_records]
-            print(json.dumps(sheets.sync_documents(store.documents(tender_ids), direct_records), ensure_ascii=False))
-            print(json.dumps(sheets.ensure_ai_analysis(), ensure_ascii=False))
+            print(json.dumps(sync_document_registry(
+                store,
+                sheets,
+                store.records(),
+                reference["rules"],
+                getattr(settings, "min_remaining_hours", 24),
+            ), ensure_ascii=False))
         elif args.command == "clean-ai-analysis":
             sheets = GoogleSheets(settings)
-            print(json.dumps(sheets.clean_ai_analysis(), ensure_ascii=False))
+            reference = sheets.reference({
+                "keywords": settings.reference_keywords(),
+                "rules": [
+                    dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))
+                    for row in default_rules()
+                ],
+            })
+            records = store.records()
+            all_direct = direct_records(records, reference["rules"])
+            active_direct = active_direct_records(
+                records, reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            )
+            print(json.dumps(sheets.clean_ai_analysis(
+                tender_ids=[record["id"] for record in active_direct],
+                retained_ids=[record["id"] for record in all_direct],
+            ), ensure_ascii=False))
         elif args.command == "sync-manager-ai":
             sheets = GoogleSheets(settings)
             print(json.dumps(sheets.sync_manager_ai_analysis(), ensure_ascii=False))
@@ -674,7 +755,10 @@ def main():
                         LOG.warning("TenderLand files unavailable for tender %s: %s", record["id"], error)
             finally:
                 client.close()
-            print(json.dumps(sheets.sync_documents(store.documents([record["id"] for record in records]), records), ensure_ascii=False))
+            all_direct = direct_records(store.records(), reference["rules"])
+            print(json.dumps(sync_document_registry(
+                store, sheets, all_direct, reference["rules"], getattr(settings, "min_remaining_hours", 24)
+            ), ensure_ascii=False))
         elif args.command == "archive-documents":
             if args.limit is not None and args.limit < 1:
                 parser.error("--limit must be positive")
@@ -690,7 +774,13 @@ def main():
                 store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
             )
             result = archive_documents(store, records, settings, limit=args.limit)
-            result.update(sheets.sync_documents(store.documents([record["id"] for record in records]), records))
+            result.update(sync_document_registry(
+                store,
+                sheets,
+                store.records(),
+                reference["rules"],
+                getattr(settings, "min_remaining_hours", 24),
+            ))
             print(json.dumps(result, ensure_ascii=False))
         elif args.command == "cleanup-tender-artifacts":
             record = next((x for x in store.records() if str(x["id"]) == str(args.id)), None)
@@ -700,8 +790,8 @@ def main():
             removed_db = store.delete_extracted_artifacts(record["id"])
             sheets = GoogleSheets(settings)
             direct_ids = [x["id"] for x in store.records() if classify(x).bucket == DIRECT]
-            direct_records = [x for x in store.records() if classify(x).bucket == DIRECT]
-            sheets.sync_documents(store.documents(direct_ids), direct_records)
+            direct_history = [x for x in store.records() if classify(x).bucket == DIRECT]
+            sheets.sync_documents(store.documents(direct_ids), direct_history)
             print(json.dumps({"drive_trashed": removed_drive, "registry_removed": removed_db}, ensure_ascii=False))
     finally:
         store.close()

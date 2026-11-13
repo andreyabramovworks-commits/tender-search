@@ -1,6 +1,6 @@
 import re
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
@@ -82,6 +82,21 @@ def submission_deadline_is_today_or_past(value, today=None):
     return moment.date() <= today
 
 
+def submission_deadline_has_required_time(value, minimum_hours=24, current_time=None):
+    """Keep unknown deadlines; reject only known deadlines inside the time window."""
+    value = str(value or "").strip()
+    if not value:
+        return True
+    try:
+        deadline = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=MOSCOW)
+    current_time = current_time or datetime.now(UTC)
+    return deadline.astimezone(UTC) > current_time.astimezone(UTC) + timedelta(hours=minimum_hours)
+
+
 class GoogleSheets:
     def __init__(self, settings, session=None, spreadsheet_id=None):
         self.settings = settings
@@ -148,6 +163,7 @@ class GoogleSheets:
             row for row in source_rows[1:]
             if row and len(row) > 8 and str(row[0]).strip()
             and str(row[8]).strip() in MANAGER_VISIBLE_AI_DECISIONS
+            and submission_deadline_has_required_time(row[2] if len(row) > 2 else "")
         ]
         existing_ids = {
             str(row[0]).strip() for row in target_rows[1:] if row and str(row[0]).strip()
@@ -300,7 +316,7 @@ class GoogleSheets:
             deadline = source[2] if source and len(source) > 2 else (row[2] if len(row) > 2 else "")
             should_hide = (
                 ai_decision not in MANAGER_VISIBLE_AI_DECISIONS
-                or submission_deadline_is_today_or_past(deadline)
+                or not submission_deadline_has_required_time(deadline)
             )
             (hide if should_hide else show).append(row_number)
 
@@ -850,6 +866,16 @@ class GoogleSheets:
             self.format_sheet(sheet["sheetId"])
         return {"rows": len(grouped), "documents": len(attachments)}
 
+    def document_tender_ids(self):
+        """Return existing registry IDs so an expired tender is retained, not reintroduced."""
+        if not self.target_sheet("Документы", create=False):
+            return set()
+        return {
+            str(row[0]).strip()
+            for row in self.values("'Документы'!A2:A10000")
+            if row and str(row[0]).strip()
+        }
+
     def ensure_ai_analysis(self):
         title = "AI-анализ"
         headers = AI_ANALYSIS_HEADERS
@@ -921,8 +947,8 @@ class GoogleSheets:
             )
         return {"headers": len(headers)}
 
-    def clean_ai_analysis(self, tender_ids=None):
-        """Keep AI-analysis as a compact queue of every tender in Тендеры.
+    def clean_ai_analysis(self, tender_ids=None, retained_ids=None):
+        """Keep active tenders in the AI queue and hide retained stale history.
 
         Existing rows are moved only by deleting entire rows, so human choices,
         comments and row colouring remain attached to their TenderLand ID.
@@ -939,6 +965,12 @@ class GoogleSheets:
             ]
         tender_ids = list(dict.fromkeys(str(tender_id).strip() for tender_id in tender_ids if str(tender_id).strip()))
         tender_id_set = set(tender_ids)
+        retained_ids = list(dict.fromkeys(
+            str(tender_id).strip()
+            for tender_id in (retained_ids if retained_ids is not None else tender_ids)
+            if str(tender_id).strip()
+        ))
+        retained_id_set = set(retained_ids)
         rows = self.values("'AI-анализ'!A1:U1000")
         if rows and any(rows[0]) and rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("AI analysis headers differ; refusing to delete rows")
@@ -950,7 +982,7 @@ class GoogleSheets:
                     removal_rows.append(row_index)
                     continue
                 raise SheetsError(f"AI row {row_index} has data but no TenderLand ID")
-            if tender_id not in tender_id_set or tender_id in kept_ids:
+            if tender_id not in retained_id_set or tender_id in kept_ids:
                 removal_rows.append(row_index)
                 continue
             kept_ids.add(tender_id)
@@ -1010,34 +1042,56 @@ class GoogleSheets:
             },
         )
         self._refresh_ai_registry_fields()
-        return {"removed": len(removal_rows), "added": len(missing_ids), "kept": len(kept_ids) + len(missing_ids)}
+        visibility = self.set_ai_visibility(tender_id_set)
+        return {
+            "removed": len(removal_rows),
+            "added": len(missing_ids),
+            "kept": len(kept_ids) + len(missing_ids),
+            "visibility": visibility,
+        }
+
+    def _set_tab_visibility(self, title, visible_ids):
+        """Hide non-active tender rows while retaining their existing formatting."""
+        visible_ids = {str(tender_id) for tender_id in visible_ids}
+        sheet = self.target_sheet(title, create=False)
+        if not sheet:
+            return {"hidden": 0, "shown": 0}
+        rows = self.values("'" + title.replace("'", "''") + "'!A2:A10000")
+        hide, show = [], []
+        for row_number, row in enumerate(rows, start=2):
+            if not row or not str(row[0]).strip():
+                continue
+            (show if str(row[0]).strip() in visible_ids else hide).append(row_number)
+        result = {"hidden": 0, "shown": 0}
+        for row_numbers, hidden, key in ((hide, True, "hidden"), (show, False, "shown")):
+            for offset in range(0, len(row_numbers), 200):
+                requests = [
+                    {"updateDimensionProperties": {"range": {
+                        "sheetId": sheet["sheetId"], "dimension": "ROWS",
+                        "startIndex": row_number - 1, "endIndex": row_number,
+                    }, "properties": {"hiddenByUser": hidden}, "fields": "hiddenByUser"}}
+                    for row_number in row_numbers[offset : offset + 200]
+                ]
+                if requests:
+                    self.request(":batchUpdate", "POST", {"requests": requests})
+            result[key] += len(row_numbers)
+        return result
+
+    def set_documents_visibility(self, visible_ids):
+        """Hide expired tender document rows; their red formatting/history remains."""
+        return self._set_tab_visibility("Документы", visible_ids)
+
+    def set_ai_visibility(self, visible_ids):
+        """Hide AI rows which are no longer eligible for analysis."""
+        return self._set_tab_visibility("AI-анализ", visible_ids)
 
     def set_review_visibility(self, visible_ids):
         """Hide expired rows in the three review queues without deleting history."""
-        visible_ids = {str(tender_id) for tender_id in visible_ids}
         result = {"hidden": 0, "shown": 0}
         for title in (self.settings.sheet_title, "Партнёрам", "Нецелевые"):
-            sheet = self.target_sheet(title, create=False)
-            if not sheet:
-                continue
-            rows = self.values("'" + title.replace("'", "''") + "'!A2:A10000")
-            hide, show = [], []
-            for row_number, row in enumerate(rows, start=2):
-                if not row or not str(row[0]).strip():
-                    continue
-                (show if str(row[0]).strip() in visible_ids else hide).append(row_number)
-            for row_numbers, hidden, key in ((hide, True, "hidden"), (show, False, "shown")):
-                for offset in range(0, len(row_numbers), 200):
-                    requests = [
-                        {"updateDimensionProperties": {"range": {
-                            "sheetId": sheet["sheetId"], "dimension": "ROWS",
-                            "startIndex": row_number - 1, "endIndex": row_number,
-                        }, "properties": {"hiddenByUser": hidden}, "fields": "hiddenByUser"}}
-                        for row_number in row_numbers[offset : offset + 200]
-                    ]
-                    if requests:
-                        self.request(":batchUpdate", "POST", {"requests": requests})
-                result[key] += len(row_numbers)
+            outcome = self._set_tab_visibility(title, visible_ids)
+            result["hidden"] += outcome["hidden"]
+            result["shown"] += outcome["shown"]
         return result
 
     def _refresh_ai_registry_fields(self):

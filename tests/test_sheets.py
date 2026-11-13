@@ -5,8 +5,12 @@ import pytest
 
 from tender_search.config import Settings
 from tender_search.model import HEADERS, merge, normalize, sheet_row
-from tender_search.sheets import GoogleSheets, SheetsError
-from tender_search.sheets import submission_deadline_is_today_or_past
+from tender_search.sheets import (
+    GoogleSheets,
+    SheetsError,
+    submission_deadline_has_required_time,
+    submission_deadline_is_today_or_past,
+)
 
 
 class Response:
@@ -134,3 +138,10 @@ def test_manager_visibility_hides_only_known_today_or_past_deadlines():
     assert not submission_deadline_is_today_or_past("2026-11-13T00:00:00+03:00", today)
     assert not submission_deadline_is_today_or_past("")
     assert not submission_deadline_is_today_or_past("неизвестно", today)
+
+
+def test_manager_visibility_uses_the_same_24_hour_deadline_window():
+    now = __import__("datetime").datetime(2026, 11, 12, 9, tzinfo=__import__("datetime").UTC)
+    assert not submission_deadline_has_required_time("2026-11-13T08:59:00+00:00", current_time=now)
+    assert submission_deadline_has_required_time("2026-11-13T09:01:00+00:00", current_time=now)
+    assert submission_deadline_has_required_time("неизвестно", current_time=now)
