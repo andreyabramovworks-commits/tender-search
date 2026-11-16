@@ -1245,7 +1245,7 @@ class GoogleSheets:
             [
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:B;2;FALSE);"")))',
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:S;19;FALSE);"")))',
-                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(NUMBERVALUE(VLOOKUP(A2:A;\'Тендеры\'!A:N;14;FALSE);".";",");"")))',
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VALUE(SUBSTITUTE(VLOOKUP(A2:A;\'Тендеры\'!A:N;14;FALSE);".";","));"")))',
                 '=ARRAYFORMULA(IF(A2:A="";"";HYPERLINK("https://tenderland.ru/Entity/Tender?id="&A2:A;"https://tenderland.ru/Entity/Tender?id="&A2:A)))',
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(HYPERLINK(VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE);VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE));"")))',
             ],
