@@ -56,6 +56,7 @@ MANAGER_NAMES = [
 ]
 CRM_STATUS_HEADER = "Статус CRM"
 MOSCOW = ZoneInfo("Europe/Moscow")
+URL_PATTERN = re.compile(r"https?://[^\s<>'\"]+", re.I)
 
 
 def missing_manager_ai_fields(source_row, manager_row):
@@ -70,6 +71,39 @@ def missing_manager_ai_fields(source_row, manager_row):
     if not str(source[8]).strip() or str(manager[8]).strip():
         return None
     return source[8:10], source[13:18], source[20]
+
+
+def price_as_number(value):
+    """Keep price cells numeric so a Sheets number format can group thousands."""
+    text = str(value or "").strip().replace("\u00a0", "").replace(" ", "")
+    if re.fullmatch(r"-?\d+(?:[.,]\d+)?", text):
+        return float(text.replace(",", "."))
+    return value
+
+
+def compact_link_text(value):
+    """Replace visible long URLs with individually clickable short labels."""
+    source = str(value or "")
+    parts, runs, position = [], [], 0
+    cursor = 0
+    for match in URL_PATTERN.finditer(source):
+        parts.append(source[cursor:match.start()])
+        raw_url = match.group()
+        url = raw_url.rstrip(".,;:)")
+        trailing = raw_url[len(url):]
+        label = "↗ Открыть"
+        parts.append(label)
+        if url:
+            runs.extend([
+                {"startIndex": position + match.start() - cursor, "format": {"link": {"uri": url}}},
+                {"startIndex": position + match.start() - cursor + len(label), "format": {}},
+            ])
+        parts.append(trailing)
+        position += len(source[cursor:match.start()]) + len(label) + len(trailing)
+        cursor = match.end()
+    parts.append(source[cursor:])
+    text = "".join(parts)
+    return text, [run for run in runs if run["startIndex"] < len(text)]
 
 
 def submission_deadline_is_today_or_past(value, today=None):
@@ -224,6 +258,7 @@ class GoogleSheets:
             tender_id = str(row[0]).strip()
             url = f"https://tenderland.ru/Entity/Tender?id={tender_id}"
             row[4] = f'=HYPERLINK("{url}";"{url}")'
+            row[3] = price_as_number(row[3])
             row[6] = ""  # manager decision is deliberately blank on arrival
             row[7] = ""  # manager assignment is human-only
             additions.append(row)
@@ -235,7 +270,7 @@ class GoogleSheets:
             str(row[0]).strip(): (
                 row[1] if len(row) > 1 else "",
                 row[2] if len(row) > 2 else "",
-                row[3] if len(row) > 3 else "",
+                price_as_number(row[3]) if len(row) > 3 else "",
                 row[4] if len(row) > 4 else "",
                 row[5] if len(row) > 5 else "",
                 row[11] if len(row) > 11 else "",
@@ -341,6 +376,7 @@ class GoogleSheets:
                     "data": [{"range": f"'AI-анализ'!A{start}:U{end}", "values": additions}],
                 },
             )
+        target.format_ai_document_links()
         visibility = target.sync_manager_ai_visibility(source_rows)
         return {
             "enabled": True,
@@ -480,6 +516,24 @@ class GoogleSheets:
                     },
                 ]
             },
+        )
+        self.format_ai_price_column(sheet)
+
+    def format_ai_price_column(self, sheet=None):
+        """Show numeric tender prices with readable thousands separators."""
+        sheet = sheet or self.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            return
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {"requests": [{"repeatCell": {
+                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1,
+                          "endRowIndex": sheet["gridProperties"]["rowCount"],
+                          "startColumnIndex": 3, "endColumnIndex": 4},
+                "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0.##"}}},
+                "fields": "userEnteredFormat.numberFormat",
+            }}]},
         )
 
     def ensure_crm_status_column(self):
@@ -1024,6 +1078,7 @@ class GoogleSheets:
                     ]
                 },
             )
+        self.format_ai_price_column(sheet)
         return {"headers": len(headers)}
 
     def clean_ai_analysis(self, tender_ids=None, retained_ids=None):
@@ -1190,7 +1245,7 @@ class GoogleSheets:
             [
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:B;2;FALSE);"")))',
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:S;19;FALSE);"")))',
-                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(VLOOKUP(A2:A;\'Тендеры\'!A:N;14;FALSE);"")))',
+                '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(NUMBERVALUE(VLOOKUP(A2:A;\'Тендеры\'!A:N;14;FALSE);".";",");"")))',
                 '=ARRAYFORMULA(IF(A2:A="";"";HYPERLINK("https://tenderland.ru/Entity/Tender?id="&A2:A;"https://tenderland.ru/Entity/Tender?id="&A2:A)))',
                 '=ARRAYFORMULA(IF(A2:A="";"";IFERROR(HYPERLINK(VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE);VLOOKUP(A2:A;\'Тендеры\'!A:F;6;FALSE));"")))',
             ],
@@ -1209,6 +1264,29 @@ class GoogleSheets:
                 ]]},
             ]},
         )
+        self.format_ai_document_links()
+
+    def format_ai_document_links(self):
+        """Make every document URL in S short, separate and clickable."""
+        sheet = self.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            return
+        rows = self.values("'AI-анализ'!S2:S1000")
+        requests = []
+        for row_index, row in enumerate(rows, start=1):
+            value = row[0] if row else ""
+            if not value or not URL_PATTERN.search(str(value)):
+                continue
+            text, runs = compact_link_text(value)
+            requests.append({"updateCells": {
+                "range": {"sheetId": sheet["sheetId"], "startRowIndex": row_index,
+                          "endRowIndex": row_index + 1, "startColumnIndex": 18, "endColumnIndex": 19},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": text}, "textFormatRuns": runs}]}],
+                "fields": "userEnteredValue,textFormatRuns",
+            }})
+        for offset in range(0, len(requests), 100):
+            if requests[offset:offset + 100]:
+                self.request(":batchUpdate", "POST", {"requests": requests[offset:offset + 100]})
 
     def _sync_tab(self, title, records, managed_ids):
         sheet = self.target_sheet(title, create=True)

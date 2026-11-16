@@ -8,7 +8,9 @@ from tender_search.model import HEADERS, merge, normalize, sheet_row
 from tender_search.sheets import (
     GoogleSheets,
     SheetsError,
+    compact_link_text,
     missing_manager_ai_fields,
+    price_as_number,
     submission_deadline_has_required_time,
     submission_deadline_is_today_or_past,
 )
@@ -165,3 +167,11 @@ def test_missing_manager_ai_fields_backfills_only_a_blank_ai_result():
     )
     manager[8] = "нужна ручная проверка"
     assert missing_manager_ai_fields(source, manager) is None
+
+
+def test_price_and_document_urls_get_human_friendly_cells():
+    assert price_as_number("11 656 742.8") == 11656742.8
+    assert price_as_number("цена по запросу") == "цена по запросу"
+    text, runs = compact_link_text("ТЗ: https://drive.google.com/file/d/test/view; далее")
+    assert text == "ТЗ: ↗ Открыть; далее"
+    assert runs[0]["format"]["link"]["uri"] == "https://drive.google.com/file/d/test/view"
