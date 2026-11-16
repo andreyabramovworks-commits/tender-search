@@ -39,8 +39,12 @@ AI_ANALYSIS_HEADERS = [
 ]
 
 MANAGER_ACCEPTED = "Подходит"
-MANAGER_REJECTED = "Не подходит"
-MANAGER_DECISIONS = [MANAGER_ACCEPTED, MANAGER_REJECTED]
+MANAGER_REJECTION_REASONS = [
+    "Далеко и дешево",
+    "Нецелевой",
+    "Не проходим по цене",
+]
+MANAGER_DECISIONS = [MANAGER_ACCEPTED, *MANAGER_REJECTION_REASONS]
 MANAGER_VISIBLE_AI_DECISIONS = {"интересен, нужны уточнения", "нужна ручная проверка"}
 
 MANAGER_NAMES = [
@@ -48,6 +52,7 @@ MANAGER_NAMES = [
     "Сметанин Олег",
     "Колесникова Анастасия",
     "Колесников Данил",
+    "Прокопьев Александр",
 ]
 CRM_STATUS_HEADER = "Статус CRM"
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -150,6 +155,33 @@ class GoogleSheets:
     def values(self, a1):
         return self.request("/values/" + quote(a1, safe="")).get("values", [])
 
+    def manager_names(self):
+        """Read the editable manager list from the reference tab.
+
+        The list deliberately lives beside search keys and filters: changing it
+        there changes both the primary AI sheet and its manager copy on their
+        next refresh.  The built-in list is only a safe fallback for an older
+        workbook which does not yet have the section.
+        """
+        if not self.target_sheet("Справочник", create=False):
+            return MANAGER_NAMES
+        rows = self.values("'Справочник'!H1:H1000")
+        heading = next(
+            (index for index, row in enumerate(rows) if row and str(row[0]).strip() == "Менеджеры"),
+            None,
+        )
+        if heading is None:
+            return MANAGER_NAMES
+        names = []
+        for row in rows[heading + 1 :]:
+            name = str(row[0]).strip() if row else ""
+            if not name:
+                break
+            names.append(name)
+        if not names:
+            raise SheetsError("Reference manager list is empty")
+        return list(dict.fromkeys(names))
+
     def sync_manager_ai_analysis(self):
         """Append new AI results to the manager workbook without touching its work.
 
@@ -163,8 +195,9 @@ class GoogleSheets:
         source_rows = self.values("'AI-анализ'!A1:U1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
+        manager_names = self.manager_names()
         target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
-        target._ensure_manager_ai_layout()
+        target._ensure_manager_ai_layout(manager_names)
         target.ensure_crm_status_column()
         target_rows = target.values("'AI-анализ'!A1:U1000")
         if not target_rows or target_rows[0] != AI_ANALYSIS_HEADERS:
@@ -377,7 +410,7 @@ class GoogleSheets:
                     target.request(":batchUpdate", "POST", {"requests": requests})
         return {"enabled": True, "hidden": len(hide), "shown": len(show), "unchanged": 0}
 
-    def _ensure_manager_ai_layout(self):
+    def _ensure_manager_ai_layout(self, manager_names=None):
         """Normalise the manager copy once, without changing any tender rows."""
         sheet = self.target_sheet("AI-анализ", create=False)
         if not sheet:
@@ -417,6 +450,7 @@ class GoogleSheets:
             )
         elif header != AI_ANALYSIS_HEADERS:
             raise SheetsError("Manager AI analysis headers differ; refusing to overwrite")
+        manager_names = manager_names or MANAGER_NAMES
         self.request(
             ":batchUpdate",
             "POST",
@@ -441,7 +475,7 @@ class GoogleSheets:
                     {
                         "setDataValidation": {
                             "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 7, "endColumnIndex": 8},
-                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in MANAGER_NAMES]}, "strict": True, "showCustomUi": True},
+                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in manager_names]}, "strict": True, "showCustomUi": True},
                         }
                     },
                 ]
@@ -683,6 +717,11 @@ class GoogleSheets:
             "PUT",
             {"values": rows},
         )
+        self.request(
+            "/values/" + quote(prefix + "!H4:H" + str(4 + len(MANAGER_NAMES)), safe="") + "?valueInputOption=RAW",
+            "PUT",
+            {"values": [["Менеджеры"], *[[name] for name in MANAGER_NAMES]]},
+        )
         self.format_sheet(sheet["sheetId"])
         self.format_data(sheet["sheetId"], len(rows))
 
@@ -919,6 +958,7 @@ class GoogleSheets:
         title = "AI-анализ"
         headers = AI_ANALYSIS_HEADERS
         sheet = self.target_sheet(title, create=True)
+        manager_names = self.manager_names()
         prefix = "'AI-анализ'"
         existing = self.values(prefix + "!A1:U2")
         if existing and any(existing[0]) and existing[0] != headers:
@@ -974,7 +1014,7 @@ class GoogleSheets:
                                 "rule": {
                                     "condition": {
                                         "type": "ONE_OF_LIST",
-                                        "values": [{"userEnteredValue": name} for name in MANAGER_NAMES],
+                                        "values": [{"userEnteredValue": name} for name in manager_names],
                                     },
                                     "strict": True,
                                     "showCustomUi": True,
@@ -1060,6 +1100,7 @@ class GoogleSheets:
             )
         # Queue rows created above must have the same manual controls as
         # existing rows, including when the row is later picked up by AI.
+        manager_names = self.manager_names()
         self.request(
             ":batchUpdate",
             "POST",
@@ -1074,7 +1115,7 @@ class GoogleSheets:
                     {
                         "setDataValidation": {
                             "range": {"sheetId": ai_sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 7, "endColumnIndex": 8},
-                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in MANAGER_NAMES]}, "strict": True, "showCustomUi": True},
+                            "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": name} for name in manager_names]}, "strict": True, "showCustomUi": True},
                         }
                     },
                 ]
