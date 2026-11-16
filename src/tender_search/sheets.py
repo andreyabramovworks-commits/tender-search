@@ -525,17 +525,20 @@ class GoogleSheets:
         sheet = sheet or self.target_sheet("AI-анализ", create=False)
         if not sheet:
             return
-        self.request(
-            ":batchUpdate",
-            "POST",
-            {"requests": [{"repeatCell": {
-                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1,
-                          "endRowIndex": sheet["gridProperties"]["rowCount"],
-                          "startColumnIndex": 3, "endColumnIndex": 4},
-                "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0.##"}}},
+        requests = []
+        for row_number, row in enumerate(self.values("'AI-анализ'!A2:A1000"), start=2):
+            if not row or not str(row[0]).strip():
+                continue
+            requests.append({"updateCells": {
+                "range": {"sheetId": sheet["sheetId"], "startRowIndex": row_number - 1,
+                          "endRowIndex": row_number, "startColumnIndex": 3, "endColumnIndex": 4},
+                "rows": [{"values": [{"userEnteredFormat": {
+                    "numberFormat": {"type": "NUMBER", "pattern": "#,##0.##"},
+                }}]}],
                 "fields": "userEnteredFormat.numberFormat",
-            }}]},
-        )
+            }})
+        for offset in range(0, len(requests), 100):
+            self.request(":batchUpdate", "POST", {"requests": requests[offset:offset + 100]})
 
     def normalize_ai_price_values(self):
         """Convert legacy text prices in the manager copy without touching formulas."""
