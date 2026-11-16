@@ -8,6 +8,7 @@ from tender_search.model import HEADERS, merge, normalize, sheet_row
 from tender_search.sheets import (
     GoogleSheets,
     SheetsError,
+    missing_manager_ai_fields,
     submission_deadline_has_required_time,
     submission_deadline_is_today_or_past,
 )
@@ -145,3 +146,22 @@ def test_manager_visibility_uses_the_same_24_hour_deadline_window():
     assert not submission_deadline_has_required_time("2026-11-13T08:59:00+00:00", current_time=now)
     assert submission_deadline_has_required_time("2026-11-13T09:01:00+00:00", current_time=now)
     assert submission_deadline_has_required_time("неизвестно", current_time=now)
+
+
+def test_missing_manager_ai_fields_backfills_only_a_blank_ai_result():
+    source = [""] * 21
+    source[8] = "интересен, нужны уточнения"
+    source[9] = "AI-комментарий"
+    source[13:18] = ["работы", "цена", "риски", "документы", "вопросы"]
+    source[20] = "ручной доступ"
+    manager = [""] * 21
+    manager[6:8] = ["Подходит", "Ораева Алина"]
+    manager[10] = "Комментарий руководителя"
+
+    assert missing_manager_ai_fields(source, manager) == (
+        ["интересен, нужны уточнения", "AI-комментарий"],
+        ["работы", "цена", "риски", "документы", "вопросы"],
+        "ручной доступ",
+    )
+    manager[8] = "нужна ручная проверка"
+    assert missing_manager_ai_fields(source, manager) is None

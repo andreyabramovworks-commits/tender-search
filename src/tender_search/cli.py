@@ -216,7 +216,10 @@ def discover_and_sync_documents(
     result = (
         archive_documents(store, direct_records, client.settings, limit=archive_limit)
         if archive_limit != 0
-        else {"archived": 0, "queued": len(store.documents(direct_ids))}
+        # This is the count of known document records, not a pending-download
+        # queue. Actual downloads are delegated to the archive timer so the
+        # daily search remains fast.
+        else {"archived": 0, "known_document_links": len(store.documents(direct_ids))}
     )
     registry_records = registry_records if registry_records is not None else direct_records
     result.update(sync_document_registry(store, sheets, registry_records, rules, minimum_hours))

@@ -53,6 +53,20 @@ CRM_STATUS_HEADER = "Статус CRM"
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 
+def missing_manager_ai_fields(source_row, manager_row):
+    """Return AI-owned values for a manager row that missed its AI result.
+
+    Manager decisions, assignees, and leader comments are deliberately not
+    represented here. A non-empty manager AI decision is treated as an
+    already delivered historical result and is never overwritten.
+    """
+    source = list(source_row) + [""] * (len(AI_ANALYSIS_HEADERS) - len(source_row))
+    manager = list(manager_row) + [""] * (len(AI_ANALYSIS_HEADERS) - len(manager_row))
+    if not str(source[8]).strip() or str(manager[8]).strip():
+        return None
+    return source[8:10], source[13:18], source[20]
+
+
 def submission_deadline_is_today_or_past(value, today=None):
     """True only for a known deadline on the current/past Moscow date.
 
@@ -180,8 +194,10 @@ class GoogleSheets:
             row[6] = ""  # manager decision is deliberately blank on arrival
             row[7] = ""  # manager assignment is human-only
             additions.append(row)
-        # Refresh procurement facts in B:F, L:M and T. G:H are manager-owned,
-        # J:K contain human comments, and V is reserved for CRM status.
+        # Refresh procurement facts in B:F, L:M and T. G:H and K are
+        # manager-owned, and V is reserved for CRM status. AI fields are
+        # normally immutable after append, except for historic rows that were
+        # copied before their AI result was available.
         source_metadata = {
             str(row[0]).strip(): (
                 row[1] if len(row) > 1 else "",
@@ -196,7 +212,13 @@ class GoogleSheets:
             for row in source_rows[1:]
             if row and len(row) > 6 and str(row[0]).strip()
         }
+        source_by_id = {
+            str(row[0]).strip(): row
+            for row in source_rows[1:]
+            if row and str(row[0]).strip()
+        }
         source_metadata_updates = []
+        ai_backfilled = 0
         for row_number, target_row in enumerate(target_rows[1:], start=2):
             if not target_row or not str(target_row[0]).strip():
                 continue
@@ -221,6 +243,22 @@ class GoogleSheets:
                     },
                     {"range": f"'AI-анализ'!T{row_number}", "values": [[category]]},
                 ])
+            source_row = source_by_id.get(str(target_row[0]).strip())
+            missing_ai = missing_manager_ai_fields(source_row, target_row) if source_row else None
+            if missing_ai:
+                decision_and_comment, analysis_fields, manual_access = missing_ai
+                source_metadata_updates.extend([
+                    {
+                        "range": f"'AI-анализ'!I{row_number}:J{row_number}",
+                        "values": [decision_and_comment],
+                    },
+                    {
+                        "range": f"'AI-анализ'!N{row_number}:R{row_number}",
+                        "values": [analysis_fields],
+                    },
+                    {"range": f"'AI-анализ'!U{row_number}", "values": [[manual_access]]},
+                ])
+                ai_backfilled += 1
         if source_metadata_updates:
             target.request(
                 "/values:batchUpdate",
@@ -275,6 +313,7 @@ class GoogleSheets:
             "enabled": True,
             "appended": len(additions),
             "existing": len(existing_ids),
+            "ai_backfilled": ai_backfilled,
             "visibility": visibility,
         }
 
