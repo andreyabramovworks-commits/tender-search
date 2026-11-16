@@ -39,13 +39,15 @@ AI_ANALYSIS_HEADERS = [
 ]
 
 MANAGER_ACCEPTED = "Подходит"
+MANAGER_PROSPECTIVE = "Перспективный"
 MANAGER_REJECTION_REASONS = [
     "Далеко и дешево",
     "Нецелевой",
     "Не проходим по цене",
 ]
-MANAGER_DECISIONS = [MANAGER_ACCEPTED, *MANAGER_REJECTION_REASONS]
+MANAGER_DECISIONS = [MANAGER_ACCEPTED, MANAGER_PROSPECTIVE, *MANAGER_REJECTION_REASONS]
 MANAGER_VISIBLE_AI_DECISIONS = {"интересен, нужны уточнения", "нужна ручная проверка"}
+PERSPECTIVE_SHEET_TITLE = "Перспективные"
 
 MANAGER_NAMES = [
     "Ораева Алина",
@@ -229,6 +231,10 @@ class GoogleSheets:
         source_rows = self.values("'AI-анализ'!A1:U1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
+        self.ensure_prospective_format()
+        # This is a permanent shortlist, not another operating queue.  Capture
+        # the selection before the normal visibility logic hides expired rows.
+        source_perspectives = self.sync_perspective_register(source_rows)
         manager_names = self.manager_names()
         target = GoogleSheets(self.settings, session=self.session, spreadsheet_id=target_id)
         target._ensure_manager_ai_layout(manager_names)
@@ -378,12 +384,17 @@ class GoogleSheets:
             )
         target.normalize_ai_price_values()
         target.format_ai_document_links()
+        target_perspectives = target.sync_perspective_register()
         visibility = target.sync_manager_ai_visibility(source_rows)
         return {
             "enabled": True,
             "appended": len(additions),
             "existing": len(existing_ids),
             "ai_backfilled": ai_backfilled,
+            "perspectives": {
+                "source": source_perspectives,
+                "manager_copy": target_perspectives,
+            },
             "visibility": visibility,
         }
 
@@ -446,6 +457,134 @@ class GoogleSheets:
                 if requests:
                     target.request(":batchUpdate", "POST", {"requests": requests})
         return {"enabled": True, "hidden": len(hide), "shown": len(show), "unchanged": 0}
+
+    def sync_perspective_register(self, source_rows=None):
+        """Append manager-selected prospects to a permanent, visible shortlist.
+
+        A prospect is deliberately copied only once and is never removed or
+        hidden afterwards.  It represents a tender worth remembering even if
+        its live submission deadline expires or it disappears from the working
+        AI queue.  The source AI sheet remains the place where managers make
+        their decisions; this tab is a read-only historical collection.
+        """
+        source_rows = source_rows or self.values("'AI-анализ'!A1:U1000")
+        if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("AI analysis headers differ; refusing prospect sync")
+
+        sheet = self.target_sheet(PERSPECTIVE_SHEET_TITLE, create=True)
+        prefix = "'" + PERSPECTIVE_SHEET_TITLE.replace("'", "''") + "'"
+        current_rows = self.values(prefix + "!A1:U1000")
+        is_new = not current_rows or not any(current_rows[0])
+        if not is_new and current_rows[0] != AI_ANALYSIS_HEADERS:
+            raise SheetsError("Prospect register headers differ; refusing to overwrite")
+        if is_new:
+            self.request(
+                "/values:batchUpdate",
+                "POST",
+                {
+                    "valueInputOption": "RAW",
+                    "data": [{"range": prefix + "!A1:U1", "values": [AI_ANALYSIS_HEADERS]}],
+                },
+            )
+            manager_names = self.manager_names()
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": sheet["sheetId"],
+                                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 4},
+                                },
+                                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                            }
+                        },
+                        {
+                            "repeatCell": {
+                                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 0, "endRowIndex": 1,
+                                          "startColumnIndex": 0, "endColumnIndex": len(AI_ANALYSIS_HEADERS)},
+                                "cell": {"userEnteredFormat": {
+                                    "backgroundColor": {"red": 0.93, "green": 0.93, "blue": 0.93},
+                                    "textFormat": {"bold": True}, "wrapStrategy": "WRAP",
+                                }},
+                                "fields": "userEnteredFormat",
+                            }
+                        },
+                        {
+                            "setBasicFilter": {
+                                "filter": {"range": {"sheetId": sheet["sheetId"], "startRowIndex": 0,
+                                                      "startColumnIndex": 0, "endColumnIndex": len(AI_ANALYSIS_HEADERS)}}
+                            }
+                        },
+                        {
+                            "setDataValidation": {
+                                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                                          "startColumnIndex": 6, "endColumnIndex": 7},
+                                "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                                    {"userEnteredValue": item} for item in MANAGER_DECISIONS
+                                ]}, "strict": True, "showCustomUi": True},
+                            }
+                        },
+                        {
+                            "setDataValidation": {
+                                "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                                          "startColumnIndex": 7, "endColumnIndex": 8},
+                                "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                                    {"userEnteredValue": name} for name in manager_names
+                                ]}, "strict": True, "showCustomUi": True},
+                            }
+                        },
+                    ]
+                },
+            )
+            current_rows = [AI_ANALYSIS_HEADERS]
+
+        existing_ids = {
+            str(row[0]).strip() for row in current_rows[1:]
+            if row and str(row[0]).strip()
+        }
+        additions = []
+        for source in source_rows[1:]:
+            if not source or not str(source[0]).strip():
+                continue
+            row = list(source[:len(AI_ANALYSIS_HEADERS)])
+            row += [""] * (len(AI_ANALYSIS_HEADERS) - len(row))
+            tender_id = str(row[0]).strip()
+            if row[6] == MANAGER_PROSPECTIVE and tender_id not in existing_ids:
+                additions.append(row)
+                existing_ids.add(tender_id)
+        if additions:
+            last_real_row = max(
+                (number for number, row in enumerate(current_rows[1:], start=2)
+                 if row and str(row[0]).strip()),
+                default=1,
+            )
+            start = last_real_row + 1
+            end = start + len(additions) - 1
+            self.request(
+                "/values:batchUpdate",
+                "POST",
+                {"valueInputOption": "USER_ENTERED",
+                 "data": [{"range": f"{prefix}!A{start}:U{end}", "values": additions}]},
+            )
+            self.request(
+                ":batchUpdate",
+                "POST",
+                {"requests": [
+                    {"repeatCell": {
+                        "range": {"sheetId": sheet["sheetId"], "startRowIndex": start - 1, "endRowIndex": end,
+                                  "startColumnIndex": 0, "endColumnIndex": len(AI_ANALYSIS_HEADERS)},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": {"red": 1, "green": 0.95, "blue": 0.6},
+                            "wrapStrategy": "WRAP", "verticalAlignment": "TOP",
+                        }},
+                        "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment",
+                    }}
+                ]},
+            )
+        return {"added": len(additions), "stored": len(existing_ids)}
 
     def _ensure_manager_ai_layout(self, manager_names=None):
         """Normalise the manager copy once, without changing any tender rows."""
@@ -519,6 +658,48 @@ class GoogleSheets:
             },
         )
         self.format_ai_price_column(sheet)
+        self.ensure_prospective_format(sheet)
+
+    def ensure_prospective_format(self, sheet=None):
+        """Colour a selected prospect yellow without duplicating sheet rules."""
+        sheet = sheet or self.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            return
+        formula = '=AND($G2="Перспективный")'
+        metadata = self.metadata()
+        current = next(
+            (item for item in metadata.get("sheets", [])
+             if item.get("properties", {}).get("sheetId") == sheet["sheetId"]),
+            {},
+        ).get("conditionalFormats", [])
+        for rule in current:
+            values = rule.get("booleanRule", {}).get("condition", {}).get("values", [])
+            if any(value.get("userEnteredValue") == formula for value in values):
+                return
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {
+                "requests": [{
+                    "addConditionalFormatRule": {
+                        "index": len(current),
+                        "rule": {
+                            "ranges": [{
+                                "sheetId": sheet["sheetId"], "startRowIndex": 1,
+                                "endRowIndex": sheet.get("gridProperties", {}).get("rowCount", 1000),
+                                "startColumnIndex": 0, "endColumnIndex": len(AI_ANALYSIS_HEADERS),
+                            }],
+                            "booleanRule": {
+                                "condition": {"type": "CUSTOM_FORMULA", "values": [
+                                    {"userEnteredValue": formula}
+                                ]},
+                                "format": {"backgroundColor": {"red": 1, "green": 0.95, "blue": 0.6}},
+                            },
+                        },
+                    }
+                }]
+            },
+        )
 
     def format_ai_price_column(self, sheet=None):
         """Show numeric tender prices with readable thousands separators."""
@@ -1101,6 +1282,7 @@ class GoogleSheets:
                 },
             )
         self.format_ai_price_column(sheet)
+        self.ensure_prospective_format(sheet)
         return {"headers": len(headers)}
 
     def clean_ai_analysis(self, tender_ids=None, retained_ids=None):
@@ -1199,11 +1381,13 @@ class GoogleSheets:
             },
         )
         self._refresh_ai_registry_fields()
+        perspectives = self.sync_perspective_register()
         visibility = self.set_ai_visibility(tender_id_set)
         return {
             "removed": len(removal_rows),
             "added": len(missing_ids),
             "kept": len(kept_ids) + len(missing_ids),
+            "perspectives": perspectives,
             "visibility": visibility,
         }
 
