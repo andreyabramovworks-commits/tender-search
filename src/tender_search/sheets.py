@@ -228,6 +228,9 @@ class GoogleSheets:
         target_id = self.settings.manager_spreadsheet_id
         if not target_id:
             return {"enabled": False, "appended": 0, "existing": 0}
+        # Apply the current manager dropdown choices to the source sheet too;
+        # its header may predate a newly introduced decision.
+        self.ensure_ai_analysis()
         source_rows = self.values("'AI-анализ'!A1:U1000")
         if not source_rows or source_rows[0] != AI_ANALYSIS_HEADERS:
             raise SheetsError("Source AI analysis headers differ; refusing manager sync")
@@ -656,6 +659,28 @@ class GoogleSheets:
                     },
                 ]
             },
+        )
+        # Keep controls current on an existing sheet as well as a newly created
+        # one.  The source workbook can predate a later decision category.
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {"requests": [
+                {"setDataValidation": {
+                    "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                              "startColumnIndex": 6, "endColumnIndex": 7},
+                    "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": item} for item in MANAGER_DECISIONS
+                    ]}, "strict": True, "showCustomUi": True},
+                }},
+                {"setDataValidation": {
+                    "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                              "startColumnIndex": 7, "endColumnIndex": 8},
+                    "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": name} for name in manager_names
+                    ]}, "strict": True, "showCustomUi": True},
+                }},
+            ]},
         )
         self.format_ai_price_column(sheet)
         self.ensure_prospective_format(sheet)
@@ -1281,6 +1306,28 @@ class GoogleSheets:
                     ]
                 },
             )
+        # The list can change after the sheet was first created, so refresh
+        # validation on every run instead of leaving an older dropdown behind.
+        self.request(
+            ":batchUpdate",
+            "POST",
+            {"requests": [
+                {"setDataValidation": {
+                    "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                              "startColumnIndex": 6, "endColumnIndex": 7},
+                    "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": item} for item in MANAGER_DECISIONS
+                    ]}, "strict": True, "showCustomUi": True},
+                }},
+                {"setDataValidation": {
+                    "range": {"sheetId": sheet["sheetId"], "startRowIndex": 1, "endRowIndex": 1000,
+                              "startColumnIndex": 7, "endColumnIndex": 8},
+                    "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": name} for name in manager_names
+                    ]}, "strict": True, "showCustomUi": True},
+                }},
+            ]},
+        )
         self.format_ai_price_column(sheet)
         self.ensure_prospective_format(sheet)
         return {"headers": len(headers)}
