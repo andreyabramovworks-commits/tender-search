@@ -376,6 +376,7 @@ class GoogleSheets:
                     "data": [{"range": f"'AI-анализ'!A{start}:U{end}", "values": additions}],
                 },
             )
+        target.normalize_ai_price_values()
         target.format_ai_document_links()
         visibility = target.sync_manager_ai_visibility(source_rows)
         return {
@@ -535,6 +536,24 @@ class GoogleSheets:
                 "fields": "userEnteredFormat.numberFormat",
             }}]},
         )
+
+    def normalize_ai_price_values(self):
+        """Convert legacy text prices in the manager copy without touching formulas."""
+        sheet = self.target_sheet("AI-анализ", create=False)
+        if not sheet:
+            return
+        writes = []
+        for row_number, row in enumerate(self.values("'AI-анализ'!D2:D1000"), start=2):
+            value = row[0] if row else ""
+            numeric = price_as_number(value)
+            if isinstance(numeric, float) and str(value).strip() != "":
+                writes.append({"range": f"'AI-анализ'!D{row_number}", "values": [[numeric]]})
+        for offset in range(0, len(writes), 100):
+            self.request(
+                "/values:batchUpdate", "POST",
+                {"valueInputOption": "USER_ENTERED", "data": writes[offset:offset + 100]},
+            )
+        self.format_ai_price_column(sheet)
 
     def ensure_crm_status_column(self):
         """Reserve V for the CRM result without modifying manager decisions."""
