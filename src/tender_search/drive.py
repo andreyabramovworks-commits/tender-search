@@ -58,9 +58,21 @@ def validate_document_content(name, content):
     if extension in {".zip", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"} and not zipfile.is_zipfile(io.BytesIO(content)):
         raise DriveError("Office/ZIP attachment is structurally invalid")
     if extension == ".doc" and not (
-        content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") or sample.startswith(b"{\\rtf")
+        content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+        or sample.startswith(b"{\\rtf")
+        or zipfile.is_zipfile(io.BytesIO(content))
     ):
         raise DriveError("DOC attachment does not have a supported document signature")
+
+
+def is_office_package(content):
+    """True only for an actual OOXML/OpenDocument package, not any ZIP."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = set(archive.namelist())
+    except zipfile.BadZipFile:
+        return False
+    return "[Content_Types].xml" in names or "mimetype" in names
 
 
 class DriveArchive:
@@ -257,10 +269,14 @@ class DriveArchive:
         source_mime = mimetypes.guess_type(source_name)[0] or source_mime
         folder_id = self.tender_folder(record)
         digest = hashlib.sha256(content).hexdigest()
-        # DOCX/XLSX/PPTX are ZIP-based internally, but must stay whole so
-        # Drive can convert them to native Google files.  Unpack only an
-        # attachment explicitly identified as a .zip archive.
-        is_zip = document["kind"].lower() == "zip" or source_name.lower().endswith(".zip")
+        # TenderLand sometimes gives an HTML ZIP the misleading extension
+        # .doc/.docx/.xlsx.  A generic ZIP cannot be opened as Office: unpack
+        # it and archive its real files.  Actual OOXML/ODF packages stay whole.
+        is_zip = (
+            document["kind"].lower() == "zip"
+            or source_name.lower().endswith(".zip")
+            or (zipfile.is_zipfile(io.BytesIO(content)) and not is_office_package(content))
+        )
         if not is_zip:
             try:
                 drive_url = self.upload(folder_id, source_name, content, source_mime)
