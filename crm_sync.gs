@@ -15,6 +15,7 @@ const CRM_FIELDS = {
 };
 const CRM_HEADERS = {
   A: 'ID TenderLand', B: 'Объект закупки', C: 'Окончание подачи заявок',
+  D: 'Цена',
   F: 'Ссылка на первоисточник', G: 'Решение менеджера', H: 'Менеджер',
   S: 'Доказательства и ссылки', V: 'Статус CRM',
   W: 'Кнопка для создания картотчки в битрикс',
@@ -92,6 +93,18 @@ function crmDocumentLinks_(text) {
   return urls;
 }
 
+function crmPrice_(value) {
+  const normalized = String(value || '').replace(/[\s\u00a0]/g, '').replace(',', '.');
+  if (!/^(?:\d+)(?:\.\d+)?$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function crmExistingDealId_(status) {
+  const match = String(status || '').match(/^В CRM:\s*сделка #(\d+)$/);
+  return match ? match[1] : '';
+}
+
 function crmCandidate_(sheet, rowNumber, expectedId) {
   const values = sheet.getRange(rowNumber, 1, 1, 23).getDisplayValues()[0];
   const id = String(values[0]).trim();
@@ -101,7 +114,6 @@ function crmCandidate_(sheet, rowNumber, expectedId) {
   if (!Object.prototype.hasOwnProperty.call(CRM_MANAGERS, manager)) {
     throw new Error('Менеджер не указан или отсутствует в сопоставлении Bitrix24');
   }
-  if (values[21].trim()) return {id, already: values[21].trim()};
   if (!crmDeadlineFuture_(values[2])) throw new Error('Окончание подачи заявок сегодня или уже прошло');
   const source = crmSourceById_(id);
   let object = values[1].trim();
@@ -127,29 +139,40 @@ function crmCandidate_(sheet, rowNumber, expectedId) {
   };
   const start = source[17].match(/^(\d{4}-\d{2}-\d{2})/);
   if (start) fields.BEGINDATE = start[1];
-  return {id, registry: source[2], fields};
+  const price = crmPrice_(values[3]);
+  if (price !== null) {
+    fields.OPPORTUNITY = price;
+    const currency = String(source[14] || 'RUB').trim().toUpperCase();
+    fields.CURRENCY_ID = /^[A-Z]{3}$/.test(currency) ? currency : 'RUB';
+  }
+  return {id, registry: source[2], fields, already: values[21].trim(),
+          existingDealId: crmExistingDealId_(values[21])};
 }
 
 function crmProcessRow_(sheet, rowNumber, expectedId) {
   const candidate = crmCandidate_(sheet, rowNumber, expectedId);
-  if (candidate.already) return candidate.already;
-  const found = crmApi_('crm.deal.list', {
-    filter: {[CRM_REGISTRY_FIELD]: candidate.registry, CATEGORY_ID: 2},
-    select: ['ID', 'TITLE', 'COMMENTS', CRM_REGISTRY_FIELD],
-  });
   let id;
-  if (found.length) {
-    const matching = found.filter(deal => String(deal.COMMENTS || '').includes(`ID TenderLand: ${candidate.id}`));
-    if (matching.length !== 1 || found.length !== 1) {
-      throw new Error('В CRM есть сделка с тем же реестровым номером; проверьте вручную');
-    }
-    id = matching[0].ID;
+  if (candidate.existingDealId) {
+    id = candidate.existingDealId;
+    crmApi_('crm.deal.update', {id, fields: candidate.fields});
   } else {
-    try {
-      id = crmApi_('crm.deal.add', {fields: candidate.fields, params: {REGISTER_SONET_EVENT: 'N'}});
-    } catch (error) {
-      // An uncertain response may follow a successful create. The next run recovers by ID in COMMENTS.
-      throw new Error(`Создание не подтверждено; повторная проверка CRM нужна: ${error.message}`);
+    const found = crmApi_('crm.deal.list', {
+      filter: {[CRM_REGISTRY_FIELD]: candidate.registry, CATEGORY_ID: 2},
+      select: ['ID', 'TITLE', 'COMMENTS', CRM_REGISTRY_FIELD],
+    });
+    if (found.length) {
+      const matching = found.filter(deal => String(deal.COMMENTS || '').includes(`ID TenderLand: ${candidate.id}`));
+      if (matching.length !== 1 || found.length !== 1) {
+        throw new Error('В CRM есть сделка с тем же реестровым номером; проверьте вручную');
+      }
+      id = matching[0].ID;
+      crmApi_('crm.deal.update', {id, fields: candidate.fields});
+    } else {
+      try {
+        id = crmApi_('crm.deal.add', {fields: candidate.fields, params: {REGISTER_SONET_EVENT: 'N'}});
+      } catch (error) {
+        throw new Error(`Создание не подтверждено; повторная проверка CRM нужна: ${error.message}`);
+      }
     }
   }
   const deal = crmApi_('crm.deal.get', {id});
@@ -161,6 +184,7 @@ function crmProcessRow_(sheet, rowNumber, expectedId) {
   const currentId = String(sheet.getRange(rowNumber, 1).getDisplayValue()).trim();
   if (currentId !== candidate.id) throw new Error(`Сделка #${id} создана, но строка переместилась`);
   const statusCell = sheet.getRange(rowNumber, 22);
+  if (candidate.already) return candidate.already;
   if (statusCell.getDisplayValue().trim()) throw new Error(`Сделка #${id} создана, но статус строки уже занят`);
   const status = `В CRM: сделка #${id}`;
   statusCell.setValue(status);
@@ -182,12 +206,16 @@ function syncApprovedTendersToBitrix() {
     const sheet = crmManagerSheet_();
     refreshCrmButtons();
     const rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 1), 22).getDisplayValues();
-    const report = {created: 0, skipped: 0, errors: []};
+    const report = {created: 0, updated: 0, skipped: 0, errors: []};
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row[0] || row[6] !== 'Подходит' || !row[7] || row[21]) continue;
+      if (!row[0] || row[6] !== 'Подходит' || !row[7]) continue;
       if (!crmDeadlineFuture_(row[2])) { report.skipped++; continue; }
-      try { crmProcessRow_(sheet, i + 2, row[0]); report.created++; }
+      try {
+        const wasInCrm = !!row[21];
+        crmProcessRow_(sheet, i + 2, row[0]);
+        if (wasInCrm) report.updated++; else report.created++;
+      }
       catch (error) { report.errors.push({tenderId: row[0], message: error.message}); }
     }
     console.log(JSON.stringify(report));

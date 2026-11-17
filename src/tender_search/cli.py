@@ -75,6 +75,10 @@ def sync_document_registry(store, sheets, records, rules, minimum_hours=24):
     existing_ids = sheets.document_tender_ids() if hasattr(sheets, "document_tender_ids") else set()
     registry = [record for record in direct if record["id"] in active_ids or record["id"] in existing_ids]
     result = sheets.sync_documents(store.documents([record["id"] for record in registry]), registry)
+    # A document archive can finish after the morning AI queue was assembled.
+    # Publish the new Drive links immediately, rather than leaving a completed
+    # archive invisible to AI and the manager/CRM sync until the next full run.
+    sheets.refresh_ai_registry_fields()
     if hasattr(sheets, "set_documents_visibility"):
         result["visibility"] = sheets.set_documents_visibility(active_ids)
     return result

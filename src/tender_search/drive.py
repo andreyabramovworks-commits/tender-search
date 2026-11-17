@@ -41,6 +41,28 @@ def safe_name(value, fallback="Документ"):
     return (value or fallback)[:180]
 
 
+def validate_document_content(name, content):
+    """Reject an error page masquerading as an Office/PDF attachment.
+
+    TenderLand occasionally returns an HTML access/error page with a generic
+    binary content type.  Google Drive accepts such a payload, but the result
+    is an unusable "document".  Check signatures before any upload so the
+    registry reports a retryable download failure instead of a broken link.
+    """
+    sample = content[:512].lstrip().lower()
+    if sample.startswith((b"<!doctype html", b"<html", b"<head", b"<body")):
+        raise DriveError("Tender link returned HTML content instead of a document")
+    extension = PurePosixPath(name).suffix.lower()
+    if extension == ".pdf" and not content.startswith(b"%PDF-"):
+        raise DriveError("PDF attachment does not have a PDF signature")
+    if extension in {".zip", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"} and not zipfile.is_zipfile(io.BytesIO(content)):
+        raise DriveError("Office/ZIP attachment is structurally invalid")
+    if extension == ".doc" and not (
+        content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") or sample.startswith(b"{\\rtf")
+    ):
+        raise DriveError("DOC attachment does not have a supported document signature")
+
+
 class DriveArchive:
     """Uploads after successful in-memory retrieval; no tender files persist on disk."""
 
@@ -224,6 +246,7 @@ class DriveArchive:
         """Return archive rows. ZIP members become individual Google Drive files."""
         content, source_mime = self.download(document["url"])
         source_name = safe_name(document["title"])
+        validate_document_content(source_name, content)
         # TenderLand's file endpoint commonly replies as octet-stream.  Drive
         # needs the actual Office MIME type to convert DOCX/XLSX/PPTX.
         source_mime = mimetypes.guess_type(source_name)[0] or source_mime

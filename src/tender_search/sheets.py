@@ -48,6 +48,7 @@ MANAGER_REJECTION_REASONS = [
 MANAGER_DECISIONS = [MANAGER_ACCEPTED, MANAGER_PROSPECTIVE, *MANAGER_REJECTION_REASONS]
 MANAGER_VISIBLE_AI_DECISIONS = {"интересен, нужны уточнения", "нужна ручная проверка"}
 PERSPECTIVE_SHEET_TITLE = "Перспективные"
+CRM_HISTORY_SHEET_TITLE = "История того, что подошло"
 
 MANAGER_NAMES = [
     "Ораева Алина",
@@ -389,6 +390,7 @@ class GoogleSheets:
         target.format_ai_document_links()
         target_perspectives = target.sync_perspective_register()
         visibility = target.sync_manager_ai_visibility(source_rows)
+        crm_history = self.sync_crm_success_history(target)
         return {
             "enabled": True,
             "appended": len(additions),
@@ -399,7 +401,56 @@ class GoogleSheets:
                 "manager_copy": target_perspectives,
             },
             "visibility": visibility,
+            "crm_history": crm_history,
         }
+
+    def sync_crm_success_history(self, manager_sheet=None):
+        """Append each confirmed manager-CRM transfer to a permanent main-sheet log."""
+        manager_sheet = manager_sheet or GoogleSheets(
+            self.settings, session=self.session, spreadsheet_id=self.settings.manager_spreadsheet_id
+        )
+        rows = manager_sheet.values("'AI-анализ'!A1:V10000")
+        expected = AI_ANALYSIS_HEADERS + [CRM_STATUS_HEADER]
+        if not rows or rows[0][:len(expected)] != expected:
+            raise SheetsError("Manager AI/CRM headers differ; refusing CRM history sync")
+        selected = []
+        for row in rows[1:]:
+            tender_id = str(row[0]).strip() if row else ""
+            status = str(row[21]).strip() if len(row) > 21 else ""
+            if tender_id and status.startswith("В CRM:"):
+                selected.append((tender_id, (list(row[:22]) + [""] * 22)[:22]))
+
+        sheet = self.target_sheet(CRM_HISTORY_SHEET_TITLE, create=True)
+        prefix = "'" + CRM_HISTORY_SHEET_TITLE.replace("'", "''") + "'"
+        existing = self.values(prefix + "!A1:V10000")
+        if existing and any(existing[0]) and existing[0][:len(expected)] != expected:
+            raise SheetsError("CRM history headers differ; refusing to overwrite")
+        if not existing or not any(existing[0]):
+            self.request("/values:batchUpdate", "POST", {"valueInputOption": "RAW", "data": [
+                {"range": prefix + "!A1:V1", "values": [expected]},
+            ]})
+            self.request(":batchUpdate", "POST", {"requests": [
+                {"updateSheetProperties": {"properties": {"sheetId": sheet["sheetId"], "gridProperties": {
+                    "frozenRowCount": 1, "frozenColumnCount": 4}},
+                 "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}},
+                {"repeatCell": {"range": {"sheetId": sheet["sheetId"], "startRowIndex": 0, "endRowIndex": 1,
+                                               "startColumnIndex": 0, "endColumnIndex": 22},
+                                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.85, "green": 0.94, "blue": 0.85},
+                                                                 "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
+                                "fields": "userEnteredFormat"}},
+                {"setBasicFilter": {"filter": {"range": {"sheetId": sheet["sheetId"], "startRowIndex": 0,
+                                                            "startColumnIndex": 0, "endColumnIndex": 22}}}},
+            ]})
+            existing = [expected]
+        existing_ids = {str(row[0]).strip() for row in existing[1:] if row and str(row[0]).strip()}
+        additions = [row for tender_id, row in selected if tender_id not in existing_ids]
+        if additions:
+            start = max((number for number, row in enumerate(existing[1:], 2) if row and str(row[0]).strip()), default=1) + 1
+            end = start + len(additions) - 1
+            self.request("/values:batchUpdate", "POST", {"valueInputOption": "USER_ENTERED", "data": [
+                {"range": f"{prefix}!A{start}:V{end}", "values": additions},
+            ]})
+        return {"added": len(additions), "stored": len(existing_ids) + len(additions)}
 
     def sync_manager_ai_visibility(self, source_rows=None):
         """Hide stale manager rows without deleting any human work.
@@ -1518,6 +1569,10 @@ class GoogleSheets:
             ]},
         )
         self.format_ai_document_links()
+
+    def refresh_ai_registry_fields(self):
+        """Refresh document evidence after an archive pass without rerunning AI."""
+        self._refresh_ai_registry_fields()
 
     def format_ai_document_links(self):
         """Make every document URL in S short, separate and clickable."""

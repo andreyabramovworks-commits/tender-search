@@ -2,6 +2,7 @@
 
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -37,6 +38,18 @@ def split_object_customer(value):
     object_name = value[:match.start()].strip(" ;")
     customer = re.split(r";\s*(?:закупка|лот)\b", value[match.end():], maxsplit=1, flags=re.IGNORECASE)[0]
     return object_name, customer.strip(" ;")
+
+
+def price_as_opportunity(value):
+    """Parse the human-formatted AI price into Bitrix's numeric deal amount."""
+    text = str(value or "").replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+    if not text:
+        return None
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        return None
+    return float(amount) if amount > 0 else None
 
 
 def deadline_is_future_day(value, today=None):
@@ -101,6 +114,7 @@ def preview(settings, store, limit=3):
             "object": object_name, "customer": customer,
             "source_url": source_url, "submission_start": record.get("submission_starts_at", ""),
             "submission_deadline": deadline, "close_date": None,
+            "price": cell(row, "Цена"), "currency": record.get("currency", "RUB"),
             "document_links": google_document_links(cell(row, "Доказательства и ссылки"))})
         if len(result) >= limit:
             break
@@ -121,6 +135,10 @@ def deal_fields(candidate):
                           "\n".join(candidate["document_links"])}
     if candidate.get("submission_start"):
         fields["BEGINDATE"] = candidate["submission_start"][:10]
+    price = price_as_opportunity(candidate.get("price"))
+    if price is not None:
+        fields["OPPORTUNITY"] = price
+        fields["CURRENCY_ID"] = str(candidate.get("currency") or "RUB").upper()
     return fields
 
 
