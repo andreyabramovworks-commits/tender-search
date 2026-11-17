@@ -219,9 +219,14 @@ class DriveArchive:
             raise DriveError("Tender link returned a web page, not a file")
         return data, response.headers.get("Content-Type", "application/octet-stream")
 
-    def upload(self, folder_id, name, content, source_mime, convert=True):
+    def upload(self, folder_id, name, content, source_mime, convert=False):
         extension = PurePosixPath(name).suffix.lower()
         metadata = {"name": safe_name(name), "parents": [folder_id]}
+        # Keep Office files in their original binary form.  Drive's implicit
+        # Office-to-Google conversion can report success while producing a
+        # native Google document that cannot subsequently be opened.  The
+        # original attachment is both safer for managers and preserves the
+        # supplier's exact source for AI analysis.
         if convert and extension in NATIVE_TYPES:
             metadata["mimeType"] = NATIVE_TYPES[extension]
         boundary = "tender-search-" + uuid.uuid4().hex
