@@ -276,6 +276,14 @@ class GoogleSheets:
         # manager-owned, and V is reserved for CRM status. AI fields are
         # normally immutable after append, except for historic rows that were
         # copied before their AI result was available.
+        # AI column S is rendered as rich text and therefore its displayed
+        # value only contains “↗ Открыть”.  The document registry retains the
+        # canonical URLs, which are what the manager copy and Bitrix need.
+        document_links = {
+            str(row[0]).strip(): (row[5] if len(row) > 5 else "")
+            for row in self.values("'Документы'!A2:F10000")
+            if row and str(row[0]).strip()
+        }
         source_metadata = {
             str(row[0]).strip(): (
                 row[1] if len(row) > 1 else "",
@@ -285,6 +293,7 @@ class GoogleSheets:
                 row[5] if len(row) > 5 else "",
                 row[11] if len(row) > 11 else "",
                 row[12] if len(row) > 12 else "",
+                document_links.get(str(row[0]).strip(), ""),
                 row[19] if len(row) > 19 else "",
             )
             for row in source_rows[1:]
@@ -302,7 +311,7 @@ class GoogleSheets:
                 continue
             metadata = source_metadata.get(str(target_row[0]).strip())
             if metadata:
-                object_name, end_at, price, tenderland_url, source_url, place, execution_term, category = metadata
+                object_name, end_at, price, tenderland_url, source_url, place, execution_term, evidence, category = metadata
                 source_metadata_updates.extend([
                     {
                         "range": f"'AI-анализ'!B{row_number}:D{row_number}",
@@ -319,6 +328,7 @@ class GoogleSheets:
                         "range": f"'AI-анализ'!L{row_number}:M{row_number}",
                         "values": [[place, execution_term]],
                     },
+                    {"range": f"'AI-анализ'!S{row_number}", "values": [[evidence]]},
                     {"range": f"'AI-анализ'!T{row_number}", "values": [[category]]},
                 ])
             source_row = source_by_id.get(str(target_row[0]).strip())
