@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
-from .classification import DIRECT, NON_TARGET, PARTNER, classify, default_rules
+from .classification import DIRECT, NON_TARGET, PARTNER, classify, deduplicate_records, default_rules
 from .config import Settings
 from .db import Store
 from .drive import DriveArchive, DriveError
@@ -36,6 +36,7 @@ def has_time_to_bid(record, minimum_hours=24):
 
 
 def sync_review_queues(sheets, records, rules=None, visible_ids=None):
+    records = deduplicate_records(records)
     buckets = {"Тендеры": [], "Партнёрам": [], "Нецелевые": []}
     routes = {DIRECT: "Тендеры", PARTNER: "Партнёрам", NON_TARGET: "Нецелевые"}
     for record in records:
@@ -56,14 +57,14 @@ def active_direct_records(records, rules, minimum_hours=24):
     """Return only current direct tenders that belong in documents and AI."""
     return [
         record
-        for record in records
+        for record in deduplicate_records(records)
         if classify(record, rules).bucket == DIRECT and has_time_to_bid(record, minimum_hours)
     ]
 
 
 def direct_records(records, rules):
     """Return direct tenders, including old ones retained only as hidden history."""
-    return [record for record in records if classify(record, rules).bucket == DIRECT]
+    return [record for record in deduplicate_records(records) if classify(record, rules).bucket == DIRECT]
 
 
 def sync_document_registry(store, sheets, records, rules, minimum_hours=24):
@@ -78,7 +79,8 @@ def sync_document_registry(store, sheets, records, rules, minimum_hours=24):
     # A document archive can finish after the morning AI queue was assembled.
     # Publish the new Drive links immediately, rather than leaving a completed
     # archive invisible to AI and the manager/CRM sync until the next full run.
-    sheets.refresh_ai_registry_fields()
+    if hasattr(sheets, "refresh_ai_registry_fields"):
+        sheets.refresh_ai_registry_fields()
     if hasattr(sheets, "set_documents_visibility"):
         result["visibility"] = sheets.set_documents_visibility(active_ids)
     return result
@@ -250,6 +252,7 @@ def refresh_without_search(settings):
         )
         records = store.records()
         minimum_hours = getattr(settings, "min_remaining_hours", 24)
+        records = deduplicate_records(records)
         visible_ids = {record["id"] for record in records if has_time_to_bid(record, minimum_hours)}
         all_direct = direct_records(records, reference["rules"])
         active_direct = active_direct_records(records, reference["rules"], minimum_hours)
@@ -410,7 +413,7 @@ def run(settings, args):
         summary["unique_seen"] = len(seen)
         if not args.collect_only:
             LOG.info("PANEL_STAGE|4|6|Распределение тендеров по вкладкам")
-            current_records = store.records()
+            current_records = deduplicate_records(store.records())
             summary["sheets"] = sync_review_queues(
                 sheets,
                 current_records,

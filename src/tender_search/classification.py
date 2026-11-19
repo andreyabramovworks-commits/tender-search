@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 DIRECT, PARTNER, NON_TARGET = "direct", "partner", "non_target"
+MINIMUM_TARGET_PRICE = 200_000
 
 
 @dataclass(frozen=True)
@@ -237,11 +238,71 @@ def _matches(text, rule):
     return not choices or any(re.search(pattern, text, re.I) for pattern in choices)
 
 
+def target_price(record):
+    """Return a positive RUB-like price, or ``None`` for zero/unknown values."""
+    raw = str(record.get("price") or "").strip().replace("\u00a0", " ")
+    if not raw:
+        return None
+    normalized = raw.replace(" ", "").replace(",", ".")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+        return None
+    value = float(normalized)
+    return value if value > 0 else None
+
+
+def duplicate_key(record):
+    """Conservative cross-platform identity; never merge on title alone."""
+    number = re.sub(r"[^0-9a-zа-я]", "", str(record.get("number") or "").lower())
+    if len(number) >= 6:
+        return ("number", number)
+    title = re.sub(r"\W+", "", str(record.get("title") or "").lower())
+    customer = re.sub(r"\W+", "", str(record.get("customer_inn") or "").lower())
+    deadline = str(record.get("deadline_at") or "")[:10]
+    price = target_price(record)
+    if title and customer and deadline and price is not None:
+        return ("fallback", title, customer, deadline, round(price, 2))
+    return None
+
+
+def deduplicate_records(records):
+    """Keep one best card per procurement, preserving unrelated similar lots."""
+    records = list(records)
+    groups = {}
+    for record in records:
+        key = duplicate_key(record)
+        if key is not None:
+            groups.setdefault(key, []).append(record)
+
+    def quality(record):
+        return sum(bool(record.get(key)) for key in ("source_url", "number", "customer_inn", "price", "deadline_at"))
+
+    winners = {}
+    for key, group in groups.items():
+        # Prefer the richer card, then the smallest TenderLand ID: deterministic
+        # selection prevents the survivor from changing between daily runs.
+        winners[key] = sorted(group, key=lambda item: (-quality(item), str(item["id"])))[0]
+    # Preserve the search order of the winning TenderLand card.  Apart from
+    # making tables stable, this avoids moving unrelated tenders merely because
+    # another procurement happened to be deduplicated.
+    return [
+        record for record in records
+        if (key := duplicate_key(record)) is None or winners[key] is record
+    ]
+
+
 def classify(record, rules=None):
     # Currency is a TenderLand field, not necessarily a word in the title. It
     # is deliberately part of the rule text so the editable reference filter
     # can route BYN records before a matching product keyword is considered.
     text = " ".join(str(record.get(key, "")) for key in ("title", "lot_names", "currency")).lower()
+    price = target_price(record)
+    if price is not None and price < MINIMUM_TARGET_PRICE:
+        return Decision(
+            NON_TARGET,
+            "Нецелевые",
+            f"Исключено: цена {price:,.2f} ₽ ниже {MINIMUM_TARGET_PRICE:,.0f} ₽",
+            "exclude-price-under-200k",
+        )
     if rules is None:
         rules = [
             dict(zip(("id", "priority", "bucket", "name", "all", "any", "reason"), row))

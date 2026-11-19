@@ -1,6 +1,6 @@
 import pytest
 
-from tender_search.classification import DIRECT, NON_TARGET, PARTNER, classify
+from tender_search.classification import DIRECT, NON_TARGET, PARTNER, classify, deduplicate_records
 
 
 @pytest.mark.parametrize(
@@ -31,3 +31,17 @@ def test_mixed_event_with_screen_stays_direct_and_is_flagged_for_review():
     decision = classify({"title": "Монтаж подиума и аренда светодиодного экрана", "lot_names": ""})
     assert decision.bucket == DIRECT
     assert decision.needs_review
+
+
+def test_price_below_200k_is_non_target_but_zero_is_kept():
+    assert classify({"title": "Поставка клиновых строительных лесов", "price": "199 999", "lot_names": ""}).bucket == NON_TARGET
+    assert classify({"title": "Поставка клиновых строительных лесов", "price": "0", "lot_names": ""}).bucket == DIRECT
+
+
+def test_cross_platform_duplicate_uses_procurement_number_not_title_only():
+    records = [
+        {"id": "20", "number": "123-ABC", "title": "Леса", "source_url": "https://b", "price": "300000"},
+        {"id": "10", "number": "123-ABC", "title": "Леса", "source_url": "https://a", "price": "300000"},
+        {"id": "30", "number": "456-ABC", "title": "Леса", "price": "300000"},
+    ]
+    assert [row["id"] for row in deduplicate_records(records)] == ["10", "30"]
