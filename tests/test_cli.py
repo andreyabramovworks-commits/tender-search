@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from tender_search.classification import DIRECT
 from tender_search.cli import archive_documents, has_time_to_bid, run, sync_document_registry
+from tender_search.drive import DriveError
 from tender_search.model import merge, normalize
 from tender_search.source import SourceError
 
@@ -74,6 +75,51 @@ def test_unpacked_zip_is_not_uploaded_again(monkeypatch):
     )
     assert outcome == {"archived": 0}
     assert uploaded == []
+
+
+def test_invalid_tenderland_attachment_is_marked_terminal_and_not_retried(monkeypatch):
+    updates = []
+
+    class Store:
+        def documents(self, ids):
+            return [{
+                "tender_id": "1",
+                "url": "https://tenderland.ru/File/Get?storageId=1",
+                "title": "not-a-pdf.pdf",
+                "kind": "pdf",
+                "archive_status": "pending",
+            }]
+
+        def set_archive_result(self, *args):
+            updates.append(args)
+
+    class Archive:
+        def __init__(self, settings):
+            pass
+
+        def archive(self, record, document):
+            raise DriveError("PDF attachment does not have a PDF signature")
+
+    monkeypatch.setattr("tender_search.cli.DriveArchive", Archive)
+    outcome = archive_documents(
+        Store(), [{"id": "1"}], SimpleNamespace(google_drive_folder_id="folder")
+    )
+    assert outcome == {"archived": 0}
+    assert updates[0][3] == "invalid_content"
+
+    class TerminalStore:
+        def documents(self, ids):
+            return [{
+                "tender_id": "1",
+                "url": "https://tenderland.ru/File/Get?storageId=1",
+                "title": "not-a-pdf.pdf",
+                "kind": "pdf",
+                "archive_status": "invalid_content",
+            }]
+
+    assert archive_documents(
+        TerminalStore(), [{"id": "1"}], SimpleNamespace(google_drive_folder_id="folder")
+    ) == {"archived": 0}
 
 
 def test_unavailable_old_tender_does_not_block_new_google_rows(monkeypatch, tmp_path):

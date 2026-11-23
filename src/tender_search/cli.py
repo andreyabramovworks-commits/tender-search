@@ -125,6 +125,7 @@ def archive_documents(store, records, settings, limit=None):
         if document["kind"] in {"tenderland_card", "source_entry"} or document["archive_status"] in {
             "archived",
             "unpacked",
+            "invalid_content",
         } or (
             document["archive_status"] == "download_failed" and not tenderland_file
         ):
@@ -165,7 +166,22 @@ def archive_documents(store, records, settings, limit=None):
                 )
                 archived += 1
         except (DriveError, requests.RequestException, ValueError, zipfile.BadZipFile) as error:
-            store.set_archive_result(document["tender_id"], document["url"], None, "download_failed")
+            # TenderLand sometimes serves a stable non-document payload under
+            # a .pdf/.docx name.  Retrying it every 15 minutes cannot help,
+            # while timeouts and temporary access failures still need retry.
+            message = str(error)
+            invalid_content = isinstance(error, DriveError) and (
+                "instead of a document" in message
+                or "does not have a PDF signature" in message
+                or "structurally invalid" in message
+                or "does not have a supported document signature" in message
+            )
+            store.set_archive_result(
+                document["tender_id"],
+                document["url"],
+                None,
+                "invalid_content" if invalid_content else "download_failed",
+            )
             LOG.warning(
                 "Drive archive unavailable for tender %s, %s: %s",
                 document["tender_id"],

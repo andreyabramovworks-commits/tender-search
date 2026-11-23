@@ -44,6 +44,7 @@ MANAGER_REJECTION_REASONS = [
     "Далеко и дешево",
     "Нецелевой",
     "Не проходим по цене",
+    "Дубль",
 ]
 MANAGER_DECISIONS = [MANAGER_ACCEPTED, MANAGER_PROSPECTIVE, *MANAGER_REJECTION_REASONS]
 MANAGER_VISIBLE_AI_DECISIONS = {"интересен, нужны уточнения", "нужна ручная проверка"}
