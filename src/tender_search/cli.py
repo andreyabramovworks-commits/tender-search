@@ -107,7 +107,19 @@ def archive_documents(store, records, settings, limit=None):
     archive = DriveArchive(settings)
     archived = 0
     candidates = []
-    for document in store.documents(list(by_id)):
+    documents = store.documents(list(by_id))
+    # Older versions could mark a generic ZIP wrapper as ``unpacked`` before
+    # its members had actually been persisted to Drive.  Treat that state as
+    # complete only when at least one real child archive row exists; otherwise
+    # the source attachment must be retried.
+    extracted_sources = {
+        document["url"][len("zip://") :].split("#", 1)[0]
+        for document in documents
+        if document.get("access_status") == "archived_from_zip"
+        and document.get("archive_status") == "archived"
+        and document["url"].startswith("zip://")
+    }
+    for document in documents:
         # Keep legacy audit rows, but do not attempt telephone/mail links as
         # downloads.  Only public web URLs can be tender attachments.
         if urlparse(document["url"]).scheme not in {"http", "https"}:
@@ -122,11 +134,14 @@ def archive_documents(store, records, settings, limit=None):
         # not let it delay the whole daily run.
         if "storageId=-1" in document["url"]:
             continue
-        if document["kind"] in {"tenderland_card", "source_entry"} or document["archive_status"] in {
-            "archived",
-            "unpacked",
-            "invalid_content",
-        } or (
+        unpacked_without_members = (
+            document["archive_status"] == "unpacked"
+            and document["url"] not in extracted_sources
+        )
+        if document["kind"] in {"tenderland_card", "source_entry"} or (
+            document["archive_status"] in {"archived", "invalid_content"}
+            or (document["archive_status"] == "unpacked" and not unpacked_without_members)
+        ) or (
             document["archive_status"] == "download_failed" and not tenderland_file
         ):
             continue

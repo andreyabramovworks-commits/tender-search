@@ -52,13 +52,26 @@ def test_unpacked_zip_is_not_uploaded_again(monkeypatch):
 
     class Store:
         def documents(self, ids):
-            return [{
-                "tender_id": "1",
-                "url": "https://tenderland.ru/File/Get?storageId=1",
-                "title": "archive.zip",
-                "kind": "zip",
-                "archive_status": "unpacked",
-            }]
+            return [
+                {
+                    "tender_id": "1",
+                    "url": "https://tenderland.ru/File/Get?storageId=1",
+                    "title": "archive.zip",
+                    "kind": "zip",
+                    "archive_status": "unpacked",
+                },
+                {
+                    "tender_id": "1",
+                    "url": "zip://https://tenderland.ru/File/Get?storageId=1#inside.pdf",
+                    "title": "inside.pdf",
+                    "kind": "pdf",
+                    "access_status": "archived_from_zip",
+                    "archive_status": "archived",
+                },
+            ]
+
+        def set_archive_result(self, *args):
+            pass
 
     class Archive:
         def __init__(self, settings):
@@ -75,6 +88,41 @@ def test_unpacked_zip_is_not_uploaded_again(monkeypatch):
     )
     assert outcome == {"archived": 0}
     assert uploaded == []
+
+
+def test_stale_unpacked_zip_is_retried_when_drive_members_are_missing(monkeypatch):
+    uploaded = []
+
+    class Store:
+        def documents(self, ids):
+            return [{
+                "tender_id": "1",
+                "url": "https://tenderland.ru/File/Get?storageId=1",
+                "title": "archive.zip",
+                "kind": "zip",
+                "archive_status": "unpacked",
+            }]
+
+        def set_archive_result(self, *args):
+            pass
+
+        def add_extracted_document(self, *args):
+            pass
+
+    class Archive:
+        def __init__(self, settings):
+            pass
+
+        def archive(self, record, document):
+            uploaded.append(document)
+            return [("inside.pdf", "pdf", "https://drive.example/inside", "digest")], True
+
+    monkeypatch.setattr("tender_search.cli.DriveArchive", Archive)
+    outcome = archive_documents(
+        Store(), [{"id": "1"}], SimpleNamespace(google_drive_folder_id="folder")
+    )
+    assert outcome == {"archived": 1}
+    assert uploaded[0]["title"] == "archive.zip"
 
 
 def test_invalid_tenderland_attachment_is_marked_terminal_and_not_retried(monkeypatch):
