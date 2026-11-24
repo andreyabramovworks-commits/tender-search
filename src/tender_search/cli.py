@@ -537,9 +537,21 @@ def main():
     sub.add_parser("sync-manager-ai")
     sub.add_parser("sync-manager-visibility")
     sub.add_parser("refresh-workflow")
-    sub.add_parser("collect-documents")
+    collect_documents = sub.add_parser("collect-documents")
+    collect_documents.add_argument(
+        "--id",
+        action="append",
+        dest="tender_ids",
+        help="TenderLand ID to collect; may be repeated. Without it, collect all active direct tenders.",
+    )
     archive = sub.add_parser("archive-documents")
     archive.add_argument("--limit", type=int, help="Optional maximum pending files")
+    archive.add_argument(
+        "--id",
+        action="append",
+        dest="tender_ids",
+        help="TenderLand ID to archive; may be repeated. Without it, archive all active direct tenders.",
+    )
     archive.add_argument(
         "--wait-for-lock",
         action="store_true",
@@ -770,6 +782,15 @@ def main():
             records = active_direct_records(
                 store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
             )
+            if args.tender_ids:
+                requested_ids = {str(tender_id) for tender_id in args.tender_ids}
+                records = [record for record in records if record["id"] in requested_ids]
+                found_ids = {record["id"] for record in records}
+                missing_ids = sorted(requested_ids - found_ids)
+                if missing_ids:
+                    parser.error(
+                        "Tender ID is not an active direct tender: " + ", ".join(missing_ids)
+                    )
             client = TenderLand(settings)
             try:
                 client.login()
@@ -799,6 +820,15 @@ def main():
             records = active_direct_records(
                 store.records(), reference["rules"], getattr(settings, "min_remaining_hours", 24)
             )
+            if args.tender_ids:
+                requested_ids = {str(tender_id) for tender_id in args.tender_ids}
+                records = [record for record in records if record["id"] in requested_ids]
+                found_ids = {record["id"] for record in records}
+                missing_ids = sorted(requested_ids - found_ids)
+                if missing_ids:
+                    parser.error(
+                        "Tender ID is not an active direct tender: " + ", ".join(missing_ids)
+                    )
             result = archive_documents(store, records, settings, limit=args.limit)
             result.update(sync_document_registry(
                 store,
