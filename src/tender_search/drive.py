@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.credentials import Credentials as UserCredentials
+from google.auth.exceptions import RefreshError
 from google.oauth2.service_account import Credentials
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -82,6 +83,7 @@ class DriveArchive:
         if not settings.google_drive_folder_id:
             raise DriveError("GOOGLE_DRIVE_FOLDER_ID is missing")
         scopes = ["https://www.googleapis.com/auth/drive"]
+        self.using_user_oauth = settings.google_drive_oauth_token_file.exists()
         if settings.google_drive_oauth_token_file.exists():
             credentials = UserCredentials.from_authorized_user_file(
                 str(settings.google_drive_oauth_token_file), scopes=scopes
@@ -100,6 +102,20 @@ class DriveArchive:
         self.tenderland_credentials = json.loads(settings.credentials_file.read_text(encoding="utf-8-sig"))
         self.login_tenderland()
 
+    def use_service_account(self):
+        """Continue when the interactive Drive token has been revoked.
+
+        The archive folder is shared with the service account.  That account
+        is intended as the unattended credential for daily jobs, while the
+        user OAuth token remains a convenience when it is valid.
+        """
+        credentials = Credentials.from_service_account_file(
+            str(self.settings.google_credentials_file),
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
+        self.session = AuthorizedSession(credentials)
+        self.using_user_oauth = False
+
     def login_tenderland(self):
         login = self.tenderland_session.post(
             "https://tenderland.ru/Account/Login",
@@ -113,7 +129,13 @@ class DriveArchive:
         login.raise_for_status()
 
     def request(self, method, url, **kwargs):
-        response = self.session.request(method, url, timeout=60, **kwargs)
+        try:
+            response = self.session.request(method, url, timeout=60, **kwargs)
+        except RefreshError as error:
+            if not self.using_user_oauth:
+                raise DriveError("Google Drive credentials could not be refreshed") from error
+            self.use_service_account()
+            response = self.session.request(method, url, timeout=60, **kwargs)
         if response.status_code >= 400:
             detail = response.text.replace("\n", " ").replace("\r", " ")[:300]
             raise DriveError(f"Google Drive HTTP {response.status_code}: {detail}")
