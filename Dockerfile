@@ -1,5 +1,8 @@
 FROM mcr.microsoft.com/playwright/python:v1.64.1-noble
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# The server has no IPv6 route, while some Google hosts advertise IPv6 before
+# IPv4. Prefer IPv4 so Drive/OAuth calls fail over neither slowly nor forever.
+RUN printf 'precedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
 WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
